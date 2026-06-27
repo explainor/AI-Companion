@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
@@ -202,8 +202,25 @@ def compact_count(value: int) -> str:
 
 
 @router.post("/users", response_model=UserRead)
-def create_user(payload: UserCreate) -> User:
-    name = (payload.display_name or payload.displayName or payload.name or "").strip()
+async def create_user(request: Request) -> User:
+    payload = {}
+    try:
+        payload = await request.json()
+    except Exception:
+        try:
+            form = await request.form()
+            payload = dict(form)
+        except Exception:
+            payload = {}
+    name = (
+        payload.get("display_name")
+        or payload.get("displayName")
+        or payload.get("name")
+        or request.query_params.get("display_name")
+        or request.query_params.get("displayName")
+        or request.query_params.get("name")
+        or ""
+    ).strip()
     if not name:
         raise HTTPException(status_code=400, detail="display_name is required")
     with Session(engine) as session:
