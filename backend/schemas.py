@@ -116,7 +116,9 @@ class TodoReorder(BaseModel):
 
 
 class UserCreate(BaseModel):
-    display_name: str
+    display_name: Optional[str] = None
+    displayName: Optional[str] = None
+    name: Optional[str] = None
 
 
 class UserRead(BaseModel):

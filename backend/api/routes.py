@@ -203,7 +203,7 @@ def compact_count(value: int) -> str:
 
 @router.post("/users", response_model=UserRead)
 def create_user(payload: UserCreate) -> User:
-    name = payload.display_name.strip()
+    name = (payload.display_name or payload.displayName or payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="display_name is required")
     with Session(engine) as session:
