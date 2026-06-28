@@ -1796,3 +1796,247 @@ p {
     display: none;
   }
 }
+
+@media (max-width: 560px) {
+  html,
+  body,
+  #root {
+    overflow: hidden;
+  }
+
+  .app-root,
+  .app-root.collapsed {
+    display: flex;
+    flex-direction: column;
+    height: 100dvh;
+  }
+
+  .channel-rail,
+  .app-root.collapsed .channel-rail {
+    border-bottom: 1px solid var(--border);
+    border-right: 0;
+    flex: none;
+    max-height: 132px;
+    width: 100%;
+  }
+
+  .brand-row {
+    min-height: 52px;
+    padding: 9px 12px;
+  }
+
+  .brand-lockup {
+    display: flex;
+  }
+
+  .brand-row p,
+  .channel-copy p,
+  .account-row,
+  .rail-label,
+  .new-channel span {
+    display: none;
+  }
+
+  .rail-nav {
+    border-bottom: 0;
+    padding: 0 10px 8px;
+  }
+
+  .channel-list-wrap {
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 10px 10px;
+  }
+
+  .channel-list {
+    flex-direction: row;
+    min-width: max-content;
+  }
+
+  .channel-row,
+  .new-channel {
+    border-radius: 999px;
+    flex: none;
+    height: 42px;
+    margin: 0;
+    padding: 4px;
+    width: 42px;
+  }
+
+  .channel-row .avatar {
+    height: 34px;
+    width: 34px;
+  }
+
+  .channel-copy,
+  .unread {
+    display: none;
+  }
+
+  .main-pane,
+  .chat-pane,
+  .role-page {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .topbar {
+    min-height: 56px;
+    padding: 8px 12px;
+  }
+
+  .topbar .avatar {
+    height: 34px;
+    width: 34px;
+  }
+
+  .topbar h2 {
+    font-size: 15px;
+  }
+
+  .topbar p {
+    max-width: 48vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topbar-actions {
+    gap: 4px;
+  }
+
+  .segmented {
+    height: 32px;
+  }
+
+  .segmented button {
+    height: 26px;
+    padding: 0 9px;
+  }
+
+  .message-list {
+    gap: 12px;
+    padding: 16px 12px;
+  }
+
+  .message-row {
+    max-width: 92%;
+  }
+
+  .message-row .avatar {
+    height: 30px;
+    width: 30px;
+  }
+
+  .bubble {
+    font-size: 14px;
+    padding: 9px 12px;
+  }
+
+  .composer {
+    gap: 7px;
+    padding: 9px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .suggestions {
+    gap: 6px;
+  }
+
+  .suggestions span {
+    display: none;
+  }
+
+  .suggestions button {
+    height: 28px;
+    padding: 0 10px;
+  }
+
+  .composer-box {
+    gap: 3px;
+    padding: 5px;
+  }
+
+  .composer-icon {
+    height: 34px;
+    width: 34px;
+  }
+
+  .composer-box .composer-icon:first-child,
+  .composer-box .composer-icon:nth-of-type(3),
+  .composer-box .composer-icon:nth-of-type(4) {
+    display: none;
+  }
+
+  .composer-box input {
+    height: 36px;
+  }
+
+  .send-button {
+    gap: 0;
+    height: 36px;
+    padding: 0 11px;
+  }
+
+  .send-button svg {
+    margin-right: 0;
+  }
+
+  .send-button {
+    font-size: 0;
+  }
+
+  .send-button svg {
+    height: 17px;
+    width: 17px;
+  }
+
+  .role-scroll {
+    padding: 18px 14px;
+  }
+
+  .role-card {
+    gap: 18px;
+  }
+
+  .role-hero {
+    align-items: flex-start;
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .role-hero .avatar {
+    font-size: 22px;
+    height: 56px;
+    width: 56px;
+  }
+
+  .role-hero > button {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .role-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .role-actions {
+    flex-direction: column;
+  }
+
+  .role-actions button {
+    width: 100%;
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .task-create div {
+    grid-template-columns: 1fr;
+  }
+
+  .steward-panel-body {
+    max-height: 52vh;
+    min-height: 240px;
+  }
+}
