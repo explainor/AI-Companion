@@ -48,8 +48,12 @@ DEFAULT_MODEL_SETTINGS = {
     "presence.silence_on_startup_seconds": "30",
     "presence.gate_model": "model.chat_cheap",
     "presence.generate_model": "model.chat_strong",
+    "presence.max_segments_group": "2",
+    "presence.max_segments_dm": "4",
     "presence.tone": "warm_low_variance",
     "presence.recent_window": "12",
+    "personas.butler_auto_provision": "true",
+    "personas.max_extra_owned": "1",
 }
 
 

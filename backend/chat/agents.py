@@ -102,6 +102,8 @@ def persona_output_rules() -> str:
             "- 记忆检索、记忆更新、工具调用都是后台动作，绝不能在回复中提到。",
             "- 不要说“我看了记忆”“记忆已更新”“已记录”“不用动”“工具调用完成”等出戏内容。",
             "- 回复只保留角色本人会自然说出口的话。",
+            "- 直接生成 JSON 字符串数组，例如 [\"第一条\", \"第二条\"]。",
+            "- 默认 1 条；只有自然像聊天追加时才 2-3 条。每条必须是独立 beat，不要把长段按标点机械切碎。",
         ]
     )
 
@@ -127,7 +129,7 @@ def run_persona_agent(
     recent: list[Message],
     user_content: str,
     persona_names: dict[int, str],
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[list[str], list[dict[str, Any]]]:
     model = resolve_model(session, persona.model_role, persona.model_override)
     latest_user_message = next(
         (message for message in reversed(recent) if message.author_type == "human"),
@@ -169,9 +171,9 @@ def run_persona_agent(
         )
     except Exception:
         if image_data_url:
-            return "图我收到了，但当前图片模型没接通。你先把图里关键内容说一句，我就能接着聊。", []
+            return ["图我收到了，但当前图片模型没接通。", "你先把图里关键内容说一句，我就能接着聊。"], []
         raise
-    return text or "我听到了。", calls
+    return parse_reply_segments(text) or ["我听到了。"], calls
 
 
 def user_message_content(user_content: str, image_data_url: str | None):
@@ -191,7 +193,7 @@ def fallback_persona(
     persona: Persona,
     notes: list[PersonaNote],
     user_content: str,
-) -> tuple[str, list[dict[str, Any]]]:
+) -> tuple[list[str], list[dict[str, Any]]]:
     text = user_content.lower().replace(" ", "")
     calls: list[dict[str, Any]] = []
 
@@ -207,14 +209,30 @@ def fallback_persona(
                 )
             else:
                 calls.append({"name": "add_note", "input": {"content": "兄弟今天跑了 PB"}})
-            return "可以啊兄弟，跑 PB 这事儿值得吹一晚上。", calls
+            return ["可以啊兄弟，跑 PB 这事儿值得吹一晚上。"], calls
         if "两点" in user_content and not any("健身" in n.content for n in notes):
             calls.append({"name": "add_note", "input": {"content": "哥们下午两点要去健身"}})
-            return "下午两点开练是吧，别到点又说先躺五分钟。", calls
+            return ["下午两点开练是吧。", "别到点又说先躺五分钟。"], calls
         if "健身" in user_content:
-            return "行啊，准备去健身了？别光嘴上燃，去了才算。", calls
-        return f"懂你意思，{user_content} 这事儿咱慢慢捋。", calls
+            return ["行啊，准备去健身了？", "别光嘴上燃，去了才算。"], calls
+        return [f"懂你意思，{user_content} 这事儿咱慢慢捋。"], calls
 
     if "研究设计" in user_content or "怎么改" in user_content:
-        return "建议先明确研究问题，再检查变量定义、样本选择与识别策略是否一致。", calls
-    return "我建议先把问题表述得更精确，再决定下一步方法。", calls
+        return ["建议先明确研究问题。", "再检查变量定义、样本选择与识别策略是否一致。"], calls
+    return ["我建议先把问题表述得更精确，再决定下一步方法。"], calls
+
+
+def parse_reply_segments(raw: str | None) -> list[str]:
+    text = (raw or "").strip()
+    if not text:
+        return []
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, dict) and isinstance(value.get("messages"), list):
+        return [str(item).strip() for item in value["messages"] if str(item).strip()]
+    paragraphs = [part.strip() for part in text.split("\n\n") if part.strip()]
+    return paragraphs if paragraphs else [text]

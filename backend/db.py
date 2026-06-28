@@ -24,6 +24,8 @@ def migrate_sqlite() -> None:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(personas)").fetchall()}
         migrations = [
             ("is_system", "INTEGER DEFAULT 0"),
+            ("kind", "TEXT DEFAULT 'entertainment'"),
+            ("creator_user_id", "INTEGER"),
             ("model_role", "TEXT DEFAULT 'chat_strong'"),
             ("model_override", "TEXT"),
             ("sim_config", "TEXT"),
@@ -33,6 +35,10 @@ def migrate_sqlite() -> None:
                 conn.execute(f"ALTER TABLE personas ADD COLUMN {name} {definition}")
         if "is_steward" in columns:
             conn.execute("UPDATE personas SET is_system = 1 WHERE is_steward = 1")
+        conn.execute("UPDATE personas SET kind = 'system' WHERE is_system = 1")
+        conn.execute(
+            "UPDATE personas SET kind = 'entertainment' WHERE kind IS NULL OR kind = ''"
+        )
         if "model" in columns:
             conn.execute(
                 """

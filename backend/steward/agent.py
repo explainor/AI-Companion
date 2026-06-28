@@ -105,6 +105,30 @@ STEWARD_TOOLS = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_style_profile",
+            "description": "Update a concise owner style profile from stable communication preferences.",
+            "parameters": {
+                "type": "object",
+                "properties": {"fields": {"type": "string"}},
+                "required": ["fields"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_disclosure_rule",
+            "description": "Add an owner-private disclosure rule such as deny topic=health or allow topic=work.",
+            "parameters": {
+                "type": "object",
+                "properties": {"rule": {"type": "string"}},
+                "required": ["rule"],
+            },
+        },
+    },
 ]
 
 
@@ -130,6 +154,11 @@ def run_steward_agent(
         return fallback_steward(open_todos, user_content)
 
     system = f"""{steward.system_prompt}
+
+额外学习职责:
+- 用户表现出稳定的语气、长度、用词、正式度偏好时，调用 update_style_profile。
+- 用户纠正“别说那个 / 不要透露 / 这个别在群里说”等披露边界时，调用 add_disclosure_rule，写成 allow/deny topic=...。
+- 这是结构化记忆读写，不是模型训练或微调。
 
 当前未完成待办:
 {format_todos(open_todos)}
@@ -207,5 +236,8 @@ def fallback_steward(open_todos: list[Todo], user_content: str) -> list[dict[str
                 "input": {"title": "健身", "due_time": None},
             }
         )
+
+    if any(key in user_content for key in ["别说那个", "不要透露", "别在群里说", "这个别说"]):
+        calls.append({"name": "add_disclosure_rule", "input": {"rule": "deny topic=private_correction"}})
 
     return calls

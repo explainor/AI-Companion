@@ -59,7 +59,7 @@ class ChatService(ChatServiceInterface):
         if type_ == "group" and not (persona_ids or user_ids):
             raise HTTPException(status_code=400, detail="group requires members")
         personas = self.session.exec(
-            select(Persona).where(col(Persona.id).in_(persona_ids), Persona.is_system == 0)
+            select(Persona).where(col(Persona.id).in_(persona_ids))
         ).all()
         if len(personas) != len(set(persona_ids)):
             raise HTTPException(status_code=400, detail="invalid persona_ids")
@@ -147,9 +147,10 @@ class ChatService(ChatServiceInterface):
             notes = self.memory.search(persona.id, content)
             state = self.session.get(PersonaState, persona.id)
             card = self.session.get(PersonaCard, persona.id)
-            reply_text, calls = run_persona_agent(
+            reply_segments, calls = run_persona_agent(
                 self.session, persona, notes, state, card, recent, content, names
             )
+            replies.extend(self.persist_persona_reply(channel_id, persona, reply_segments))
             self.memory.apply_tool_calls(persona.id, calls)
             memory_contents = [
                 call.get("input", {}).get("content", "")
@@ -157,9 +158,8 @@ class ChatService(ChatServiceInterface):
                 if call.get("name") in {"add_note", "update_note"}
             ]
             update_relationship_state(self.session, persona.id, content, memory_contents)
-            replies.extend(self.persist_persona_reply(channel_id, persona, reply_text))
 
-        StewardService(self.session).run_for_user_message(channel_id, recent, content, names)
+        StewardService(self.session).run_for_user_message(channel_id, self.last_messages(channel_id), content, names)
         return replies
 
     def maybe_interject(
@@ -213,6 +213,14 @@ class ChatService(ChatServiceInterface):
                 decision.suppressed_reason = "not_worth_saying"
                 return []
             decision.spoke = True
+            last_human = next((message for message in reversed(recent) if message.author_type == "human"), None)
+            if last_human:
+                StewardService(self.session).run_for_user_message(
+                    channel.id,
+                    self.last_messages(channel.id),
+                    last_human.content,
+                    self.persona_names(),
+                )
             return replies
         finally:
             self.session.add(decision)
@@ -283,10 +291,9 @@ class ChatService(ChatServiceInterface):
         self,
         channel_id: int,
         persona: Persona,
-        reply_text: str,
+        reply_text: str | list[str],
     ) -> list[MessageRead]:
-        reply_text = self.sanitize_persona_reply(reply_text)
-        chunks = self.reply_chunks(persona, reply_text)
+        chunks = self.reply_chunks(persona, reply_text, self.get_channel(channel_id).type)
         chunk_group = str(uuid.uuid4()) if len(chunks) > 1 else None
         replies: list[MessageRead] = []
         for chunk in chunks:
@@ -588,7 +595,24 @@ class ChatService(ChatServiceInterface):
             mentioned_member_ids=mentioned_member_ids or [],
         )
 
-    def reply_chunks(self, persona: Persona, text: str) -> list[str]:
+    def reply_chunks(self, persona: Persona, text: str | list[str], channel_type: str = "group") -> list[str]:
+        if isinstance(text, list):
+            chunks = [self.sanitize_persona_reply(part) for part in text if str(part).strip()]
+        else:
+            cleaned = self.sanitize_persona_reply(text)
+            chunks = [part.strip() for part in cleaned.split("\n\n") if part.strip()] or [cleaned]
+        cap = self.max_segments_for_channel(channel_type)
+        return chunks[:cap] or ["我听到了。"]
+
+    def max_segments_for_channel(self, channel_type: str) -> int:
+        key = "presence.max_segments_dm" if channel_type == "dm" else "presence.max_segments_group"
+        fallback = "4" if channel_type == "dm" else "2"
+        try:
+            return max(1, int(get_setting(self.session, key, fallback) or fallback))
+        except ValueError:
+            return int(fallback)
+
+    def legacy_reply_chunks(self, persona: Persona, text: str) -> list[str]:
         if get_setting(self.session, "sim.enabled", "true") != "true":
             return [text]
         config = self.sim_config(persona)

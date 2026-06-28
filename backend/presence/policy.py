@@ -1,3 +1,4 @@
+import json
 from typing import Optional
 
 from sqlmodel import Session
@@ -17,11 +18,11 @@ class InterjectionPolicy:
     def should_consider(self, ctx: PresenceContext) -> ConsiderResult:
         return should_consider(ctx, self.cfg, self.session)
 
-    def generate_reply(self, ctx: PresenceContext) -> Optional[str]:
+    def generate_reply(self, ctx: PresenceContext) -> Optional[list[str]]:
         model = _model_from_setting(self.session, self.cfg.get("presence.generate_model"), "model.chat_strong")
         identity_reply = self._identity_reply(ctx)
         if identity_reply:
-            return identity_reply
+            return [identity_reply]
         if not provider_ready(model):
             return self._fallback_reply(ctx)
         tone = self._tone_instruction()
@@ -47,7 +48,8 @@ class InterjectionPolicy:
 刚刚发言的人是：{ctx.last_human_name}。
 你不是这场对话的主角，他们俩才是。多数时候保持安静。
 只有当你能加一句让【两个人都】更好接话、或一起会心一笑的话时才开口。
-开口就一两句，短。不要总结、不要复述、不要把话题拽到自己身上。
+默认只发 1 条；确实自然时可以 2 条。直接输出 JSON 字符串数组，每个元素是一条独立聊天气泡。
+不要总结、不要复述、不要把话题拽到自己身上。
 如果此刻没有真正值得说的，只回复：<SILENCE>
 
 系统规则：
@@ -81,11 +83,11 @@ class InterjectionPolicy:
             return None
         if not text or "<SILENCE>" in text:
             return None
-        return text[:240]
+        return _segments(text)[:2] or None
 
-    def _fallback_reply(self, ctx: PresenceContext) -> Optional[str]:
+    def _fallback_reply(self, ctx: PresenceContext) -> Optional[list[str]]:
         if ctx.mentioned_member_ids:
-            return self._identity_reply(ctx) or "我在。你们继续聊，我只在真有必要时插一句。"
+            return [self._identity_reply(ctx) or "我在。你们继续聊，我只在真有必要时插一句。"]
         return None
 
     def _identity_reply(self, ctx: PresenceContext) -> Optional[str]:
@@ -114,3 +116,13 @@ class InterjectionPolicy:
 
 def _enabled(raw: str | None) -> bool:
     return str(raw or "").lower() in {"1", "true", "yes", "on"}
+
+
+def _segments(raw: str) -> list[str]:
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        value = None
+    if isinstance(value, list):
+        return [str(item).strip()[:240] for item in value if str(item).strip()]
+    return [part.strip()[:240] for part in raw.split("\n\n") if part.strip()] or [raw.strip()[:240]]

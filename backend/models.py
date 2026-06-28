@@ -17,6 +17,8 @@ class Persona(SQLModel, table=True):
     model: str = "MODEL_CHAT"
     is_steward: int = 0
     is_system: int = 0
+    kind: str = Field(default="entertainment", index=True)
+    creator_user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     model_role: str = Field(default="chat_strong", index=True)
     model_override: Optional[str] = None
     sim_config: Optional[str] = None

@@ -88,6 +88,8 @@ def load_presence_config(session: Session) -> dict[str, str]:
         "presence.silence_on_startup_seconds",
         "presence.gate_model",
         "presence.generate_model",
+        "presence.max_segments_group",
+        "presence.max_segments_dm",
         "presence.tone",
         "presence.recent_window",
         "memory.public_facts.enabled",

@@ -62,7 +62,7 @@ def list_candidate_agents(session: Session, channel: Channel | int) -> list[Pers
     personas = []
     for member in members:
         persona = session.get(Persona, member.member_id or member.persona_id)
-        if persona and not persona.is_system:
+        if persona:
             personas.append(persona)
     return personas
 
@@ -151,7 +151,7 @@ def _validate_member_target(session: Session, member_type: str, member_id: int) 
             raise HTTPException(status_code=404, detail="User not found")
         return
     persona = session.get(Persona, member_id)
-    if not persona or persona.is_system:
+    if not persona:
         raise HTTPException(status_code=404, detail="Persona not found")
 
 

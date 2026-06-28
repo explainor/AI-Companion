@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 from backend.chat.service import ChatService
 from backend.db import engine
 from backend.main import app
-from backend.models import Channel, ChannelMember, InterjectionDecision, Message, Persona, User
+from backend.models import Channel, ChannelMember, InterjectionDecision, Message, Persona, PersonaCard, User
 from backend.presence.triggers import format_recent_messages
 from backend.presence.policy import InterjectionPolicy
 
@@ -80,13 +80,14 @@ def main() -> None:
             identity_ctx
         )
         assert reply is not None
-        assert "smoke-user-a" in reply
-        assert "smoke-user-b" in reply
-        assert "跑" not in reply and "法拉利" not in reply and "妹子" not in reply
+        reply_text = "\n".join(reply)
+        assert "smoke-user-a" in reply_text
+        assert "smoke-user-b" in reply_text
+        assert "跑" not in reply_text and "法拉利" not in reply_text and "妹子" not in reply_text
         print("OK: two users are distinct in messages and AI presence context")
         print(ctx.participants_label)
         print(rendered)
-        print(reply)
+        print(reply_text)
 
         cleanup(session, db_channel, [user_a["id"], user_b["id"]])
 
@@ -102,6 +103,14 @@ def cleanup(session: Session, channel: Channel, user_ids: list[int]) -> None:
         session.delete(row)
     session.delete(channel)
     for user_id in user_ids:
+        cards = session.exec(select(PersonaCard).where(PersonaCard.owner_user_id == user_id)).all()
+        for card in cards:
+            persona = session.get(Persona, card.persona_id)
+            if persona and persona.kind == "system":
+                for member in session.exec(select(ChannelMember).where(ChannelMember.persona_id == persona.id)).all():
+                    session.delete(member)
+                session.delete(card)
+                session.delete(persona)
         user = session.get(User, user_id)
         if user:
             session.delete(user)

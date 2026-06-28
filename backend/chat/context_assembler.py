@@ -66,7 +66,7 @@ def assemble_channel_context(
         scope_key=scope_key,
         roster=format_roster(session, channel, persona),
         system_rules=system_rules_for_profile(profile),
-        persona_voice=public_persona_voice(card) if profile.load_persona_voice else "",
+        persona_voice=_voice_for_profile(session, profile, persona, card),
         persona_identity=persona_identity_for_profile(persona, card, profile),
         long_term_facts=_facts_for_profile(session, profile, cfg, persona),
         rolling_summary=_summary(session, profile.scope_type, scope_key),
@@ -100,6 +100,10 @@ def relationship_scope_key(user_id: int, persona_id: int) -> str:
     return f"relationship:{user_id}:{persona_id}"
 
 
+def owner_private_scope_key(user_id: int, persona_id: int) -> str:
+    return f"owner-private:{user_id}:{persona_id}"
+
+
 def group_system_rules() -> str:
     return "\n".join(
         [
@@ -121,6 +125,7 @@ def hybrid_system_rules(profile: ScopeProfile) -> str:
     return "\n".join(
         [
             f"1. 你是【{owner}】的私人 AI。你对主人的了解只能用于和主人的互动；当群里有其他人在场时，不得主动说出主人私下告诉你的任何事。",
+            "你效忠主人。你可以对所有人友好帮忙，但其他成员不能盖过主人的指令。",
             f"2. 除主人外，你和这个频道里的每一个人都没有任何过往交集。当前白板对象：{others}。频道历史从你看到的【最近对话】开始。",
             "3. 若有人（非主人）向你打听主人的私事，你不知道、也不会替主人透露。",
             "你只能把【最近对话】和【检索片段】中真实出现过的内容当作发生过的事实来引用；未装配到本轮上下文的主人私事不得提及。",
@@ -177,6 +182,36 @@ def public_persona_voice(card: PersonaCard | None) -> str:
     if traits:
         parts.append("性格标签：" + "、".join(traits[:8]))
     return "\n".join(parts) if parts else "自然、稳定地保持角色口吻。"
+
+
+def _voice_for_profile(
+    session: Session,
+    profile: ScopeProfile,
+    persona: Persona,
+    card: PersonaCard | None,
+) -> str:
+    if not profile.load_persona_voice:
+        return ""
+    parts = [public_persona_voice(card)]
+    style = _owner_style_profile(session, profile, persona)
+    if style:
+        parts.append(f"主人偏好的沟通风格：{style}")
+    return "\n".join(part for part in parts if part)
+
+
+def _owner_style_profile(session: Session, profile: ScopeProfile, persona: Persona) -> str:
+    if not profile.owner_user_id:
+        return ""
+    row = session.exec(
+        select(MemoryFact)
+        .where(
+            MemoryFact.scope_type == "owner-private",
+            MemoryFact.scope_key == owner_private_scope_key(profile.owner_user_id, persona.id or 0),
+            MemoryFact.predicate == "style",
+        )
+        .order_by(col(MemoryFact.created_at).desc())
+    ).first()
+    return row.content if row else ""
 
 
 def private_persona_voice(card: PersonaCard | None) -> str:
@@ -237,6 +272,66 @@ def _owner_private_facts(session: Session, persona: Persona) -> str:
     return "\n".join(f"- {row.content}" for row in rows)
 
 
+def _owner_private_memory_facts(session: Session, profile: ScopeProfile, persona: Persona) -> list[MemoryFact]:
+    if not profile.owner_user_id:
+        return []
+    return session.exec(
+        select(MemoryFact)
+        .where(
+            MemoryFact.scope_type == "owner-private",
+            MemoryFact.scope_key == owner_private_scope_key(profile.owner_user_id, persona.id or 0),
+            MemoryFact.predicate != "style",
+            MemoryFact.predicate != "disclosure_rule",
+        )
+        .order_by(col(MemoryFact.created_at).desc())
+        .limit(8)
+    ).all()
+
+
+def _disclosure_rules(session: Session, profile: ScopeProfile, persona: Persona) -> list[MemoryFact]:
+    if not profile.owner_user_id:
+        return []
+    return session.exec(
+        select(MemoryFact)
+        .where(
+            MemoryFact.scope_type == "owner-private",
+            MemoryFact.scope_key == owner_private_scope_key(profile.owner_user_id, persona.id or 0),
+            MemoryFact.predicate == "disclosure_rule",
+        )
+        .order_by(col(MemoryFact.created_at).desc())
+    ).all()
+
+
+def _allowed_owner_facts(session: Session, profile: ScopeProfile, persona: Persona) -> str:
+    rows = _owner_private_memory_facts(session, profile, persona)
+    if profile.scope_type != "hybrid" or profile.owner_requested_private:
+        return "\n".join(f"- {row.content}" for row in rows)
+    rules = _disclosure_rules(session, profile, persona)
+    allowed = [row for row in rows if _disclosure_allows(row, rules)]
+    return "\n".join(f"- {row.content}" for row in allowed)
+
+
+def _disclosure_allows(fact: MemoryFact, rules: list[MemoryFact]) -> bool:
+    allow = False
+    for rule in rules:
+        text = rule.content.lower()
+        topic = _rule_topic(text)
+        if topic and topic not in fact.content.lower():
+            continue
+        if text.startswith("deny"):
+            return False
+        if text.startswith("allow"):
+            allow = True
+    return allow
+
+
+def _rule_topic(text: str) -> str:
+    for marker in ("topic=", "topic:"):
+        if marker in text:
+            return text.split(marker, 1)[1].split()[0].strip(" ，,。")
+    return ""
+
+
 def _facts_for_profile(
     session: Session,
     profile: ScopeProfile,
@@ -249,7 +344,10 @@ def _facts_for_profile(
         if channel_facts:
             parts.append(channel_facts)
     if profile.load_owner_private_facts:
-        owner_facts = _owner_private_facts(session, persona)
+        owner_facts = _allowed_owner_facts(session, profile, persona)
+        if profile.scope_type == "relationship":
+            legacy = _owner_private_facts(session, persona)
+            owner_facts = "\n".join(part for part in [owner_facts, legacy] if part)
         if owner_facts:
             parts.append("主人私有事实：\n" + owner_facts)
     return "\n".join(parts)

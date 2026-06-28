@@ -1,9 +1,10 @@
 from typing import Any
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from ..core.transport import transport
-from ..models import Channel, Message, Persona
+from ..models import Channel, MemoryFact, Message, Persona, PersonaCard
+from ..chat.context_assembler import owner_private_scope_key
 from ..tools.sqlite_store import SQLiteToolStore
 from .agent import run_steward_agent
 
@@ -32,9 +33,18 @@ class StewardService:
             user_content,
             persona_names,
         )
-        self.apply_tool_calls(channel_id, calls)
+        self.apply_tool_calls(channel_id, calls, steward, recent)
 
-    def apply_tool_calls(self, channel_id: int, calls: list[dict[str, Any]]) -> None:
+    def apply_tool_calls(
+        self,
+        channel_id: int,
+        calls: list[dict[str, Any]],
+        steward: Persona | None = None,
+        recent: list[Message] | None = None,
+    ) -> None:
+        recent = recent or []
+        source_message = next((message for message in reversed(recent) if message.author_type == "human"), None)
+        owner_user_id = self._owner_user_id(steward, source_message)
         for call in calls:
             name = call["name"]
             data = call.get("input", {})
@@ -53,10 +63,22 @@ class StewardService:
                 self.tool_store.complete_todo(data.get("todo_id"), data.get("result"))
             elif name == "write_memo" and data.get("content"):
                 self.tool_store.write_memo(data["content"])
+                self._write_owner_fact(steward, owner_user_id, "memo", data["content"], source_message)
             elif name == "upsert_habit" and data.get("name") and data.get("schedule"):
                 self.tool_store.upsert_habit(data["name"], data["schedule"])
+                self._write_owner_fact(
+                    steward,
+                    owner_user_id,
+                    "habit",
+                    f"{data['name']}；schedule={data['schedule']}",
+                    source_message,
+                )
             elif name == "log_habit" and data.get("habit_id"):
                 self.tool_store.log_habit(data["habit_id"], data.get("value"))
+            elif name == "update_style_profile" and data.get("fields"):
+                self._write_owner_fact(steward, owner_user_id, "style", data["fields"], source_message, supersede=True)
+            elif name == "add_disclosure_rule" and data.get("rule"):
+                self._write_owner_fact(steward, owner_user_id, "disclosure_rule", data["rule"], source_message)
 
     def run_dock_message(
         self,
@@ -77,7 +99,7 @@ class StewardService:
             user_content,
             persona_names,
         )
-        self.apply_tool_calls(channel_id, calls)
+        self.apply_tool_calls(channel_id, calls, steward, recent)
         content = self.dock_reply_text(user_content)
         return {"persona": steward, "content": content}
 
@@ -160,3 +182,47 @@ class StewardService:
         return self.session.exec(
             select(Channel).where(Channel.type == "steward", Channel.is_system == 1)
         ).first()
+
+    def _owner_user_id(self, steward: Persona | None, source_message: Message | None) -> int | None:
+        if steward and steward.id:
+            card = self.session.get(PersonaCard, steward.id)
+            if card and card.owner_user_id:
+                return card.owner_user_id
+        return source_message.author_user_id if source_message else None
+
+    def _write_owner_fact(
+        self,
+        steward: Persona | None,
+        owner_user_id: int | None,
+        predicate: str,
+        content: str,
+        source_message: Message | None,
+        supersede: bool = False,
+    ) -> None:
+        if not steward or not steward.id or not owner_user_id or not source_message or not source_message.id:
+            return
+        supersedes_id = None
+        scope_key = owner_private_scope_key(owner_user_id, steward.id)
+        if supersede:
+            previous = self.session.exec(
+                select(MemoryFact)
+                .where(
+                    MemoryFact.scope_type == "owner-private",
+                    MemoryFact.scope_key == scope_key,
+                    MemoryFact.predicate == predicate,
+                )
+                .order_by(col(MemoryFact.created_at).desc())
+            ).first()
+            supersedes_id = previous.id if previous else None
+        fact = MemoryFact(
+            scope_type="owner-private",
+            scope_key=scope_key,
+            subject_type="user",
+            subject_id=owner_user_id,
+            predicate=predicate,
+            content=content.strip(),
+            source_message_id=source_message.id,
+            supersedes_id=supersedes_id,
+        )
+        self.session.add(fact)
+        self.session.commit()

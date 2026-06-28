@@ -6,12 +6,12 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from ..chat.memory import build_memory_store
 from ..chat.membership import add_member, list_active_members, member_display_name, remove_member
 from ..chat.service import ChatService
-from ..core.config import list_settings, set_setting
+from ..core.config import get_setting, list_settings, set_setting
 from ..core.transport import transport
 from ..db import engine
 from ..models import (
@@ -66,6 +66,7 @@ def get_current_user(session: Session, x_user_id: str | None) -> User:
     user = session.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    ensure_user_steward(session, user)
     return user
 
 
@@ -89,6 +90,8 @@ def parse_traits(value: str | None) -> list[str]:
 
 
 def role_kind(persona: Persona, card: PersonaCard | None = None) -> str:
+    if persona.kind in {"entertainment", "owned", "system"}:
+        return persona.kind
     if card and card.world_info:
         try:
             data = json.loads(card.world_info)
@@ -119,6 +122,90 @@ def set_role_kind(card: PersonaCard, kind: str | None) -> None:
             data = {}
     data["kind"] = kind
     card.world_info = json.dumps(data, ensure_ascii=False)
+
+
+def normalized_persona_kind(raw: str | None, default: str = "owned") -> str:
+    value = (raw or default).strip()
+    aliases = {
+        "AI · 伙伴": "owned",
+        "AI · 管家": "system",
+        "系统 · 管家": "system",
+        "public": "entertainment",
+        "private": "owned",
+    }
+    value = aliases.get(value, value)
+    if value not in {"entertainment", "owned", "system"}:
+        raise HTTPException(status_code=400, detail="kind must be entertainment, owned, or system")
+    return value
+
+
+def ensure_can_edit_persona(session: Session, persona: Persona, user: User) -> None:
+    card = ensure_persona_card(session, persona)
+    if persona.kind == "entertainment":
+        if persona.creator_user_id != user.id:
+            raise HTTPException(status_code=403, detail="Only the creator can edit this entertainment AI; clone it first")
+        return
+    owner_id = card.owner_user_id or persona.creator_user_id
+    if owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Only the owner can edit this AI")
+
+
+def ensure_owned_quota(session: Session, user_id: int) -> None:
+    limit = int(get_setting(session, "personas.max_extra_owned", "1") or "1")
+    rows = session.exec(
+        select(Persona)
+        .join(PersonaCard, Persona.id == PersonaCard.persona_id)
+        .where(
+            Persona.kind == "owned",
+            Persona.is_system == 0,
+            PersonaCard.owner_user_id == user_id,
+        )
+    ).all()
+    if len(rows) >= limit:
+        raise HTTPException(status_code=400, detail=f"Owned AI limit reached: max_extra_owned={limit}")
+
+
+def ensure_user_steward(session: Session, user: User) -> Persona | None:
+    if str(get_setting(session, "personas.butler_auto_provision", "true") or "true").lower() not in {"1", "true", "yes", "on"}:
+        return None
+    existing = session.exec(
+        select(Persona)
+        .join(PersonaCard, Persona.id == PersonaCard.persona_id)
+        .where(Persona.kind == "system", PersonaCard.owner_user_id == user.id)
+    ).first()
+    if existing:
+        return existing
+    name = f"{user.display_name}的管家"
+    suffix = 2
+    while session.exec(select(Persona).where(Persona.name == name)).first():
+        name = f"{user.display_name}的管家{suffix}"
+        suffix += 1
+    persona = Persona(
+        name=name,
+        system_prompt="你是用户的贴身管家，维护事项、记忆、风格画像和披露边界。",
+        model_role="steward",
+        is_system=1,
+        kind="system",
+        creator_user_id=user.id,
+        sim_config=json.dumps({"typing_delay_ms": 0, "chunking": False}, ensure_ascii=False),
+    )
+    session.add(persona)
+    session.commit()
+    session.refresh(persona)
+    session.add(
+        PersonaCard(
+            persona_id=persona.id,
+            owner_user_id=user.id,
+            persona_core="贴身管家，维护客观事项账本、用户记忆、说话风格和披露边界。",
+            self_identity=f"你是{user.display_name}的管家，一个效忠 owner 的系统 AI。",
+            relationship_backstory="你是用户的贴身管家。",
+            speaking_style="简洁、可靠、少闲聊。",
+            example_dialogues="[]",
+            traits="[]",
+        )
+    )
+    session.commit()
+    return persona
 
 
 def ensure_persona_card(session: Session, persona: Persona) -> PersonaCard:
@@ -191,6 +278,8 @@ def persona_profile(session: Session, persona: Persona) -> dict:
         "name": persona.name,
         "avatarHue": hue_for(persona.name),
         "kind": role_kind(persona, card),
+        "persona_kind": persona.kind,
+        "creator_user_id": persona.creator_user_id,
         "isAgent": not bool(persona.is_system),
         "is_system": persona.is_system,
         "model_role": persona.model_role,
@@ -245,10 +334,14 @@ async def create_user(request: Request) -> User:
     with Session(engine) as session:
         existing = session.exec(select(User).where(User.display_name == name)).first()
         if existing:
+            ensure_user_steward(session, existing)
+            session.refresh(existing)
             return existing
         user = User(display_name=name)
         session.add(user)
         session.commit()
+        session.refresh(user)
+        ensure_user_steward(session, user)
         session.refresh(user)
         return user
 
@@ -327,11 +420,17 @@ def get_persona_card(persona_id: int) -> PersonaCard:
 
 
 @router.patch("/personas/{persona_id}/card")
-def update_persona_card(persona_id: int, payload: PersonaCardUpdate) -> PersonaCard:
+def update_persona_card(
+    persona_id: int,
+    payload: PersonaCardUpdate,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> PersonaCard:
     with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
         persona = session.get(Persona, persona_id)
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
+        ensure_can_edit_persona(session, persona, user)
         card = session.get(PersonaCard, persona_id)
         if not card:
             card = PersonaCard(persona_id=persona_id)
@@ -758,11 +857,17 @@ def patch_settings(payload: dict):
 
 
 @router.patch("/personas/{persona_id}")
-def patch_persona(persona_id: int, payload: PersonaUpdate):
+def patch_persona(
+    persona_id: int,
+    payload: PersonaUpdate,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
     with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
         persona = session.get(Persona, persona_id)
         if not persona:
             raise HTTPException(status_code=404, detail="Persona not found")
+        ensure_can_edit_persona(session, persona, user)
         if payload.name is not None:
             persona.name = payload.name.strip() or persona.name
         if payload.core is not None:
@@ -776,7 +881,8 @@ def patch_persona(persona_id: int, payload: PersonaUpdate):
             card.voice = payload.voice or ""
         if payload.traits is not None:
             card.traits = json.dumps(payload.traits, ensure_ascii=False)
-        set_role_kind(card, payload.kind)
+        if payload.kind is not None:
+            persona.kind = normalized_persona_kind(payload.kind, persona.kind)
         session.add(persona)
         session.add(card)
         session.commit()
@@ -794,6 +900,8 @@ def create_persona(
         raise HTTPException(status_code=400, detail="Persona name is required")
     with Session(engine) as session:
         owner = get_current_user(session, x_user_id) if x_user_id else None
+        if owner:
+            ensure_owned_quota(session, owner.id)
         existing = session.exec(select(Persona).where(Persona.name == name)).first()
         if existing:
             raise HTTPException(status_code=409, detail="Persona name already exists")
@@ -802,6 +910,8 @@ def create_persona(
             system_prompt=payload.core or "你是用户的 AI 伙伴，请自然、稳定地保持角色口吻。",
             model_role="chat_strong",
             is_system=0,
+            kind="owned" if owner else normalized_persona_kind(payload.kind, "entertainment"),
+            creator_user_id=owner.id if owner else None,
         )
         session.add(persona)
         session.commit()
@@ -816,11 +926,63 @@ def create_persona(
             voice=payload.voice or "",
             traits=json.dumps(payload.traits or [], ensure_ascii=False),
         )
-        set_role_kind(card, payload.kind or "AI · 伙伴")
         session.add(card)
-        session.add(PersonaState(persona_id=persona.id, familiarity=0))
+        if not session.get(PersonaState, persona.id):
+            session.add(PersonaState(persona_id=persona.id, familiarity=0))
         session.commit()
         return persona_profile(session, persona)
+
+
+@router.post("/personas/{persona_id}/clone")
+def clone_persona(
+    persona_id: int,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        source = session.get(Persona, persona_id)
+        if not source:
+            raise HTTPException(status_code=404, detail="Persona not found")
+        ensure_owned_quota(session, user.id)
+        source_card = ensure_persona_card(session, source)
+        base_name = f"{source.name}（{user.display_name}的版本）"
+        name = base_name
+        suffix = 2
+        while session.exec(select(Persona).where(Persona.name == name)).first():
+            name = f"{base_name}{suffix}"
+            suffix += 1
+        clone = Persona(
+            name=name,
+            system_prompt=source.system_prompt,
+            model=source.model,
+            is_system=0,
+            kind="owned",
+            creator_user_id=user.id,
+            model_role=source.model_role,
+            model_override=source.model_override,
+            sim_config=source.sim_config,
+        )
+        session.add(clone)
+        session.commit()
+        session.refresh(clone)
+        session.add(
+            PersonaCard(
+                persona_id=clone.id,
+                owner_user_id=user.id,
+                persona_core=source_card.persona_core,
+                self_identity=source_card.self_identity,
+                relationship_backstory=source_card.relationship_backstory,
+                speaking_style=source_card.speaking_style,
+                example_dialogues=source_card.example_dialogues,
+                world_info=source_card.world_info,
+                voice=source_card.voice,
+                traits=source_card.traits,
+            )
+        )
+        if not session.get(PersonaState, clone.id):
+            session.add(PersonaState(persona_id=clone.id, familiarity=0))
+        session.commit()
+        return persona_profile(session, clone)
 
 
 @router.delete("/personas/{persona_id}")

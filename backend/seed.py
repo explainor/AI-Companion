@@ -3,7 +3,7 @@ import json
 from sqlmodel import Session, col, select
 
 from .core.config import seed_settings
-from .models import Channel, ChannelMember, Persona, PersonaCard
+from .models import Channel, ChannelMember, Persona, PersonaCard, User
 
 BROTHER_PROMPT = """你是用户的好哥们。说话随便、爱调侃、用口语,不端着,但真关心他。
 你有一本只属于你的记忆,记的是"你印象里的他"。这本记忆会作为上下文给你。
@@ -39,12 +39,20 @@ STEWARD_PROMPT = """你是用户的贴身管家。你静默监听用户与所有
 
 def seed_data(session: Session) -> None:
     seed_settings(session)
+    official = session.exec(select(User).where(User.display_name == "官方")).first()
+    if not official:
+        official = User(display_name="官方")
+        session.add(official)
+        session.commit()
+        session.refresh(official)
     personas = {
         "兄弟": Persona(
             name="兄弟",
             system_prompt=BROTHER_PROMPT,
             model_role="chat_strong",
             is_system=0,
+            kind="entertainment",
+            creator_user_id=official.id,
             sim_config=json.dumps(
                 {"typing_delay_ms": 450, "chunking": True, "tone": "short_casual"},
                 ensure_ascii=False,
@@ -55,6 +63,8 @@ def seed_data(session: Session) -> None:
             system_prompt=TEACHER_PROMPT,
             model_role="chat_strong",
             is_system=0,
+            kind="entertainment",
+            creator_user_id=official.id,
             sim_config=json.dumps(
                 {"typing_delay_ms": 900, "chunking": True, "tone": "measured"},
                 ensure_ascii=False,
@@ -65,6 +75,8 @@ def seed_data(session: Session) -> None:
             system_prompt=STEWARD_PROMPT,
             model_role="steward",
             is_system=1,
+            kind="system",
+            creator_user_id=official.id,
             sim_config=json.dumps({"typing_delay_ms": 0, "chunking": False}, ensure_ascii=False),
         ),
     }
@@ -76,6 +88,8 @@ def seed_data(session: Session) -> None:
             existing.system_prompt = persona.system_prompt
             existing.model_role = persona.model_role
             existing.is_system = persona.is_system
+            existing.kind = persona.kind
+            existing.creator_user_id = persona.creator_user_id
             existing.sim_config = persona.sim_config
             session.add(existing)
     session.commit()

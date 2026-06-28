@@ -16,6 +16,8 @@ class ScopeProfile:
     load_owner_private_facts: bool = False
     owner_user_id: int | None = None
     owner_display_name: str | None = None
+    owner_requested_private: bool = False
+    persona_kind: str = "entertainment"
     whiteboard_targets: list[str] = field(default_factory=list)
     enabled_sources: list[str] = field(default_factory=list)
 
@@ -30,6 +32,14 @@ def resolve_scope_profile(
 ) -> ScopeProfile:
     card = session.get(PersonaCard, persona.id)
     owner_user_id = card.owner_user_id if card else None
+    kind = persona.kind or ("system" if persona.is_system else "entertainment")
+    if kind == "entertainment":
+        return ScopeProfile(
+            scope_type="channel",
+            scope_key=f"channel:{channel.id}",
+            persona_kind=kind,
+            enabled_sources=["channel"],
+        )
     if channel.type == "dm":
         return ScopeProfile(
             scope_type="relationship",
@@ -38,12 +48,15 @@ def resolve_scope_profile(
             load_owner_private_facts=True,
             owner_user_id=addressed_by_user_id or owner_user_id,
             owner_display_name=_owner_name(session, addressed_by_user_id or owner_user_id),
+            owner_requested_private=True,
+            persona_kind=kind,
             enabled_sources=["relationship_backstory", "owner_private_facts"],
         )
     if not owner_user_id:
         return ScopeProfile(
             scope_type="channel",
             scope_key=f"channel:{channel.id}",
+            persona_kind=kind,
             enabled_sources=["channel"],
         )
 
@@ -61,9 +74,11 @@ def resolve_scope_profile(
         scope_type="hybrid",
         scope_key=f"hybrid:{channel.id}:{owner_user_id}:{persona.id}",
         load_relationship_backstory=unlocked,
-        load_owner_private_facts=unlocked,
+        load_owner_private_facts=True,
         owner_user_id=owner_user_id,
         owner_display_name=owner_name,
+        owner_requested_private=unlocked,
+        persona_kind=kind,
         whiteboard_targets=whiteboard_targets,
         enabled_sources=enabled_sources,
     )
