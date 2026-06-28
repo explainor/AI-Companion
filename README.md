@@ -39,9 +39,10 @@
 - `requirements.txt`
 - `.env.example`
 - `.gitignore`
+- `CONTEXT.md`
 - `README.md`
 - `CHANGELOG.md`
-- `companion_agent_v5_spec.md`
+- `docs/specs/`
 - `项目架构总结.md`
 - `start_app.ps1`、`start_app.bat`、`启动应用.bat`
 
