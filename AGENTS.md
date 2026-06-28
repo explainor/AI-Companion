@@ -47,3 +47,15 @@
 
 ## 完成一项任务时
 报告：改了哪些文件、跑了哪些检查（compileall / smoke / build）、对照 Instruction 验收项的结果。任一验收项未过即视为未完成。
+
+## 每次任务完成后必做：更新 CONTEXT.md 快照
+完成任何 Instruction 的验收后，执行以下扫描并替换 `CONTEXT.md` 末尾的「当前代码快照」区块：
+
+1. `find backend -type f -name "*.py" | sort` → 整理文件树+职责
+2. `find frontend/src -type f | sort` → 整理前端文件树
+3. `sqlite3 app.db ".schema"` → 整理表结构
+4. 扫描路由 → 整理 API 清单
+5. 对照代码实际确认功能完成状态（不只靠 CHANGELOG）
+6. 提取关键接口签名
+
+格式固定为 `## 当前代码快照（Codex 最后更新：YYYY-MM-DD）`，用 `---` 与上方内容隔开，每次整体替换该区块。
