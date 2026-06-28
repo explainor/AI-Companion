@@ -16,6 +16,7 @@ class PresenceContext:
     seconds_since_join: int
     last_human_msg: Message | None = None
     extra_context: str = ""
+    mentioned_member_ids: list[int] | None = None
 
     @property
     def user_a(self) -> str:
@@ -27,16 +28,19 @@ class PresenceContext:
         return values[1] if len(values) > 1 else "用户B"
 
     @property
-    def last_mentions_ai(self) -> bool:
-        if not self.last_human_msg:
-            return False
-        text = self.last_human_msg.content
-        return f"@{self.persona_name}" in text or "@AI" in text
+    def participants_label(self) -> str:
+        if not self.human_names:
+            return "暂无真人参与者"
+        return "、".join(
+            f"{name}(user_id={user_id})"
+            for user_id, name in sorted(self.human_names.items())
+        )
 
     @property
-    def last_names_ai(self) -> bool:
+    def last_human_name(self) -> str:
         if not self.last_human_msg:
-            return False
-        text = self.last_human_msg.content
-        return self.persona_name in text
-
+            return "暂无"
+        return self.human_names.get(
+            self.last_human_msg.author_user_id or 0,
+            f"用户#{self.last_human_msg.author_user_id or '未知'}",
+        )

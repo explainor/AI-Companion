@@ -7,6 +7,7 @@ from ..core.config import resolve_model
 from ..core.llm import provider_ready, run_tool_loop
 from ..core.time_context import build_time_context
 from ..models import Message, Persona, PersonaCard, PersonaNote, PersonaState
+from .media import image_message_to_data_url, message_text_with_media
 from .relationship import relationship_summary
 
 PERSONA_NOTE_TOOLS = [
@@ -59,7 +60,7 @@ def format_recent_messages(recent: list[Message], persona_names: dict[int, str])
             who = "用户"
         else:
             who = persona_names.get(message.persona_id or 0, "角色")
-        lines.append(f"{who}: {message.content}")
+        lines.append(f"{who}: {message_text_with_media(message)}")
     return "\n".join(lines)
 
 
@@ -128,6 +129,13 @@ def run_persona_agent(
     persona_names: dict[int, str],
 ) -> tuple[str, list[dict[str, Any]]]:
     model = resolve_model(session, persona.model_role, persona.model_override)
+    latest_user_message = next(
+        (message for message in reversed(recent) if message.author_type == "human"),
+        None,
+    )
+    image_data_url = image_message_to_data_url(latest_user_message) if latest_user_message else None
+    if image_data_url:
+        model = resolve_model(session, "vision") or model
     if not provider_ready(model):
         return fallback_persona(persona, notes, user_content)
 
@@ -148,20 +156,35 @@ def run_persona_agent(
         {"role": "system", "content": system},
         {
             "role": "user",
-            "content": (
-                f"用户刚刚说: {user_content}\n"
-                "请自然回复。需要维护记忆时只调用工具，不要在正文里描述记忆或工具动作。"
-            ),
+            "content": user_message_content(user_content, image_data_url),
         },
     ]
-    text, calls = run_tool_loop(
-        model=model,
-        messages=messages,
-        tools=PERSONA_NOTE_TOOLS,
-        on_tool_call=lambda _name, _args: "ok",
-        max_tokens=800,
-    )
+    try:
+        text, calls = run_tool_loop(
+            model=model,
+            messages=messages,
+            tools=PERSONA_NOTE_TOOLS,
+            on_tool_call=lambda _name, _args: "ok",
+            max_tokens=800,
+        )
+    except Exception:
+        if image_data_url:
+            return "图我收到了，但当前图片模型没接通。你先把图里关键内容说一句，我就能接着聊。", []
+        raise
     return text or "我听到了。", calls
+
+
+def user_message_content(user_content: str, image_data_url: str | None):
+    text = (
+        f"用户刚刚说: {user_content or '（用户发送了一张图片）'}\n"
+        "请自然回复。需要维护记忆时只调用工具，不要在正文里描述记忆或工具动作。"
+    )
+    if not image_data_url:
+        return text
+    return [
+        {"type": "text", "text": text},
+        {"type": "image_url", "image_url": {"url": image_data_url}},
+    ]
 
 
 def fallback_persona(

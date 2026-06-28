@@ -4,6 +4,27 @@ from typing import Any, Callable, Optional
 
 from litellm import completion
 
+_LLM_CALL_COUNT = 0
+
+
+def record_llm_call() -> None:
+    global _LLM_CALL_COUNT
+    _LLM_CALL_COUNT += 1
+
+
+def counted_completion(*args: Any, **kwargs: Any):
+    record_llm_call()
+    return completion(*args, **kwargs)
+
+
+def reset_llm_call_count() -> None:
+    global _LLM_CALL_COUNT
+    _LLM_CALL_COUNT = 0
+
+
+def get_llm_call_count() -> int:
+    return _LLM_CALL_COUNT
+
 
 def provider_ready(model: Optional[str]) -> bool:
     if os.getenv("LLM_FORCE_FALLBACK") == "1":
@@ -51,7 +72,7 @@ def run_tool_loop(
     final_text = ""
     calls: list[dict[str, Any]] = []
     for _ in range(max_rounds):
-        response = completion(
+        response = counted_completion(
             model=model,
             messages=messages,
             tools=tools,

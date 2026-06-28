@@ -1,6 +1,6 @@
 import json
 
-from sqlmodel import Session, select
+from sqlmodel import Session, col, select
 
 from .core.config import seed_settings
 from .models import Channel, ChannelMember, Persona, PersonaCard
@@ -83,6 +83,8 @@ def seed_data(session: Session) -> None:
     card_defaults = {
         "兄弟": {
             "persona_core": "用户的好哥们，嘴上爱调侃，实际很关心他的状态和行动。",
+            "self_identity": "你是兄弟，一个说话随便、爱调侃但有分寸的 AI 群成员。",
+            "relationship_backstory": "你是用户的好哥们，嘴上爱调侃，实际很关心他的状态和行动。",
             "speaking_style": "短句、口语、直接；可以轻微吐槽，但不说教。",
             "example_dialogues": [
                 "用户: 下午两点去健身。\\n兄弟: 行，两点开练，别到点又说先躺五分钟。",
@@ -92,6 +94,8 @@ def seed_data(session: Session) -> None:
         },
         "老师": {
             "persona_core": "用户的老师，关注研究训练、方法论和长期成长。",
+            "self_identity": "你是老师，一个严谨、克制、关注方法的 AI 群成员。",
+            "relationship_backstory": "你是用户的老师，关注研究训练、方法论和长期成长。",
             "speaking_style": "严谨、克制、准确；先界定问题，再给步骤。",
             "example_dialogues": [
                 "用户: 研究设计怎么改？\\n老师: 先明确研究问题，再检查变量定义、样本选择与识别策略是否一致。",
@@ -100,6 +104,8 @@ def seed_data(session: Session) -> None:
         },
         "管家": {
             "persona_core": "贴身管家，维护客观事项账本和备忘录。",
+            "self_identity": "你是管家，一个负责维护事项账本的系统 AI。",
+            "relationship_backstory": "你是用户的贴身管家，维护客观事项账本和备忘录。",
             "speaking_style": "简洁、可靠、少闲聊。",
             "example_dialogues": [],
             "world_info": "默认在后台监听，只有管家 dock 中才直接回复。",
@@ -112,10 +118,18 @@ def seed_data(session: Session) -> None:
             card = PersonaCard(
                 persona_id=persona.id,
                 persona_core=defaults["persona_core"],
+                self_identity=defaults["self_identity"],
+                relationship_backstory=defaults["relationship_backstory"],
                 speaking_style=defaults["speaking_style"],
                 example_dialogues=json.dumps(defaults["example_dialogues"], ensure_ascii=False),
                 world_info=defaults["world_info"],
             )
+            session.add(card)
+        else:
+            if not card.self_identity:
+                card.self_identity = defaults["self_identity"]
+            if not card.relationship_backstory:
+                card.relationship_backstory = defaults["relationship_backstory"]
             session.add(card)
     session.commit()
 
@@ -134,7 +148,15 @@ def seed_data(session: Session) -> None:
         session.add(dm)
         session.commit()
         session.refresh(dm)
-        session.add(ChannelMember(channel_id=dm.id, member_type="persona", persona_id=brother.id))
+        session.add(
+            ChannelMember(
+                channel_id=dm.id,
+                member_type="agent",
+                member_id=brother.id,
+                persona_id=brother.id,
+                active=True,
+            )
+        )
         session.commit()
 
     existing_dock = session.exec(
@@ -145,7 +167,15 @@ def seed_data(session: Session) -> None:
         session.add(dock)
         session.commit()
         session.refresh(dock)
-        session.add(ChannelMember(channel_id=dock.id, member_type="persona", persona_id=steward.id))
+        session.add(
+            ChannelMember(
+                channel_id=dock.id,
+                member_type="agent",
+                member_id=steward.id,
+                persona_id=steward.id,
+                active=True,
+            )
+        )
         session.commit()
     else:
         existing_dock.title = existing_dock.title or "管家"
@@ -155,7 +185,7 @@ def seed_data(session: Session) -> None:
         member = session.exec(
             select(ChannelMember).where(
                 ChannelMember.channel_id == existing_dock.id,
-                ChannelMember.member_type == "persona",
+                col(ChannelMember.member_type).in_(["agent", "persona"]),
                 ChannelMember.persona_id == steward.id,
             )
         ).first()
@@ -163,8 +193,10 @@ def seed_data(session: Session) -> None:
             session.add(
                 ChannelMember(
                     channel_id=existing_dock.id,
-                    member_type="persona",
+                    member_type="agent",
+                    member_id=steward.id,
                     persona_id=steward.id,
+                    active=True,
                 )
             )
         session.commit()

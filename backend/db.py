@@ -50,6 +50,7 @@ def migrate_sqlite() -> None:
                 ("pinned", "INTEGER"),
                 ("archived", "INTEGER"),
                 ("ai_enabled", "INTEGER DEFAULT 1"),
+                ("created_by_user_id", "INTEGER"),
             ],
             "messages": [
                 ("status", "TEXT DEFAULT 'delivered'"),
@@ -57,6 +58,10 @@ def migrate_sqlite() -> None:
                 ("author_type", "TEXT DEFAULT 'human'"),
                 ("author_user_id", "INTEGER"),
                 ("ai_enabled_snapshot", "INTEGER DEFAULT 1"),
+                ("message_type", "TEXT DEFAULT 'text'"),
+                ("media_url", "TEXT"),
+                ("mime_type", "TEXT"),
+                ("file_name", "TEXT"),
             ],
             "todos": [
                 ("priority", "TEXT DEFAULT 'med'"),
@@ -69,6 +74,9 @@ def migrate_sqlite() -> None:
                 ("milestones", "TEXT DEFAULT '[]'"),
             ],
             "persona_card": [
+                ("owner_user_id", "INTEGER"),
+                ("self_identity", "TEXT"),
+                ("relationship_backstory", "TEXT"),
                 ("voice", "TEXT"),
                 ("traits", "TEXT DEFAULT '[]'"),
             ],
@@ -106,9 +114,41 @@ def migrate_channel_members(conn: sqlite3.Connection) -> None:
     if not columns:
         return
     if "id" in columns and "member_type" in columns and "user_id" in columns:
+        existing = columns
+        field_migrations = [
+            ("member_id", "INTEGER"),
+            ("added_by_user_id", "INTEGER"),
+            ("active", "INTEGER DEFAULT 1"),
+            ("left_at", "TEXT"),
+        ]
+        for name, definition in field_migrations:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE channel_members ADD COLUMN {name} {definition}")
         conn.execute(
-            "UPDATE channel_members SET member_type = 'persona' WHERE member_type IS NULL OR member_type = ''"
+            """
+            UPDATE channel_members
+            SET member_type = CASE
+                WHEN member_type = 'persona' THEN 'agent'
+                WHEN member_type IS NULL OR member_type = '' THEN
+                    CASE WHEN persona_id IS NOT NULL THEN 'agent' ELSE 'human' END
+                ELSE member_type
+            END
+            """
         )
+        conn.execute(
+            """
+            UPDATE channel_members
+            SET member_id = CASE
+                WHEN member_type = 'agent' THEN persona_id
+                WHEN member_type = 'human' THEN user_id
+                ELSE member_id
+            END
+            WHERE member_id IS NULL
+            """
+        )
+        conn.execute("UPDATE channel_members SET active = 1 WHERE active IS NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_member_id ON channel_members(member_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_active ON channel_members(active)")
         return
 
     conn.execute(
@@ -117,16 +157,20 @@ def migrate_channel_members(conn: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY,
             channel_id INTEGER NOT NULL,
             member_type TEXT DEFAULT 'persona',
+            member_id INTEGER,
             persona_id INTEGER,
-            user_id INTEGER
+            user_id INTEGER,
+            added_by_user_id INTEGER,
+            active INTEGER DEFAULT 1,
+            left_at TEXT
         )
         """
     )
     select_persona = "persona_id" if "persona_id" in columns else "NULL"
     conn.execute(
         f"""
-        INSERT INTO channel_members_new (channel_id, member_type, persona_id, user_id)
-        SELECT channel_id, 'persona', {select_persona}, NULL
+        INSERT INTO channel_members_new (channel_id, member_type, member_id, persona_id, user_id, active)
+        SELECT channel_id, 'agent', {select_persona}, {select_persona}, NULL, 1
         FROM channel_members
         """
     )
@@ -134,8 +178,10 @@ def migrate_channel_members(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE channel_members_new RENAME TO channel_members")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_channel_id ON channel_members(channel_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_member_type ON channel_members(member_type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_member_id ON channel_members(member_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_persona_id ON channel_members(persona_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_user_id ON channel_members(user_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_channel_members_active ON channel_members(active)")
 
 
 @contextmanager

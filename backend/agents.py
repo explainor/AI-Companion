@@ -1,8 +1,7 @@
 import os
 from typing import Any
 
-from litellm import completion
-
+from .core.llm import counted_completion
 from .models import Message, Persona, PersonaNote, Todo
 
 PERSONA_NOTE_TOOLS = [
@@ -200,7 +199,7 @@ def run_persona_agent(
     final_text = ""
 
     for _ in range(4):
-        response = completion(
+        response = counted_completion(
             model=model,
             messages=messages,
             tools=PERSONA_NOTE_TOOLS,
@@ -258,7 +257,7 @@ def run_steward_agent(
     tool_calls: list[dict[str, Any]] = []
 
     for _ in range(4):
-        response = completion(
+        response = counted_completion(
             model=model,
             messages=messages,
             tools=STEWARD_TOOLS,

@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   Image,
+  Users,
   Mic,
   Paperclip,
   Plus,
@@ -23,7 +24,7 @@ import "./styles.css";
 const API = "/api";
 
 async function request(path, options = {}) {
-  const userId = localStorage.getItem("user_id");
+  const userId = sessionStorage.getItem("user_id");
   const response = await fetch(`${API}${path}`, {
     headers: {
       "Content-Type": "application/json",
@@ -41,8 +42,8 @@ async function request(path, options = {}) {
 
 function App() {
   const [currentUser, setCurrentUser] = useState(() => {
-    const id = localStorage.getItem("user_id");
-    const displayName = localStorage.getItem("display_name");
+    const id = sessionStorage.getItem("user_id");
+    const displayName = sessionStorage.getItem("display_name");
     return id && displayName ? { id: Number(id), display_name: displayName } : null;
   });
   const [identityDraft, setIdentityDraft] = useState("");
@@ -74,12 +75,16 @@ function App() {
   const [channelTitle, setChannelTitle] = useState("");
   const [newRoleDraft, setNewRoleDraft] = useState({ name: "", kind: "AI · 伙伴", core: "" });
   const [input, setInput] = useState("");
+  const [mentionedMembers, setMentionedMembers] = useState([]);
+  const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const [selectedUserIds, setSelectedUserIds] = useState([]);
   const [todoDraft, setTodoDraft] = useState({ title: "", dueAt: "", priority: "med" });
   const [sending, setSending] = useState(false);
   const [typing, setTyping] = useState(false);
   const [error, setError] = useState("");
   const messageEndRef = useRef(null);
   const stewardEndRef = useRef(null);
+  const imageInputRef = useRef(null);
 
   const chatChannels = useMemo(
     () => channels.filter((channel) => channel.type !== "steward" && !channel.is_system),
@@ -101,6 +106,10 @@ function App() {
     () => channels.find((channel) => channel.type === "steward" || channel.is_system),
     [channels],
   );
+  const mentionableMembers = useMemo(
+    () => (activeChannel?.members || []).filter((member) => member.memberType === "agent" && member.channelMemberId),
+    [activeChannel?.id, activeChannel?.members],
+  );
 
   useEffect(() => {
     localStorage.setItem("theme", theme);
@@ -115,6 +124,8 @@ function App() {
 
   useEffect(() => {
     if (!activeChannel) return;
+    setMentionedMembers([]);
+    setMentionPickerOpen(false);
     loadMessages(activeChannel.id).catch(showError);
     const source = new EventSource(`${API}/channels/${activeChannel.id}/events`);
     source.addEventListener("typing", () => {
@@ -213,8 +224,8 @@ function App() {
       body: JSON.stringify({ display_name: displayName }),
       headers: {},
     });
-    localStorage.setItem("user_id", String(user.id));
-    localStorage.setItem("display_name", user.display_name);
+    sessionStorage.setItem("user_id", String(user.id));
+    sessionStorage.setItem("display_name", user.display_name);
     setCurrentUser(user);
     setIdentityDraft("");
   }
@@ -235,6 +246,7 @@ function App() {
   async function sendMessage(text = input) {
     const content = text.trim();
     if (!content || !activeChannel || sending) return;
+    const mentionedIds = mentionedMembers.map((member) => member.channelMemberId);
     const optimistic = {
       id: `local-${Date.now()}`,
       senderId: "self",
@@ -246,13 +258,21 @@ function App() {
       optimistic: true,
     };
     setInput("");
+    setMentionedMembers([]);
+    setMentionPickerOpen(false);
     setSending(true);
     setError("");
     setMessages((current) => [...current, optimistic]);
     try {
       await request(`/channels/${activeChannel.id}/messages`, {
         method: "POST",
-        body: JSON.stringify({ content, text: content, type: "text", mentions: [] }),
+        body: JSON.stringify({
+          content,
+          text: content,
+          type: "text",
+          mentions: [],
+          mentioned_member_ids: mentionedIds,
+        }),
       });
       await Promise.all([loadMessages(activeChannel.id), refreshLedger()]);
     } catch (err) {
@@ -260,6 +280,74 @@ function App() {
       showError(err);
     } finally {
       setSending(false);
+    }
+  }
+
+  async function uploadAttachment(file) {
+    if (!activeChannel || !file) return null;
+    const userId = sessionStorage.getItem("user_id");
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${API}/channels/${activeChannel.id}/attachments`, {
+      method: "POST",
+      headers: userId ? { "X-User-Id": userId } : {},
+      body: form,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    return response.json();
+  }
+
+  async function sendImage(file) {
+    if (!file || !activeChannel || sending) return;
+    const caption = input.trim();
+    const mentionedIds = mentionedMembers.map((member) => member.channelMemberId);
+    const previewUrl = URL.createObjectURL(file);
+    const optimistic = {
+      id: `local-image-${Date.now()}`,
+      senderId: "self",
+      senderName: "你",
+      fromSelf: true,
+      type: "image",
+      text: caption,
+      mediaUrl: previewUrl,
+      mimeType: file.type,
+      fileName: file.name,
+      at: new Date().toISOString(),
+      status: "发送中",
+      optimistic: true,
+    };
+    setInput("");
+    setMentionedMembers([]);
+    setMentionPickerOpen(false);
+    setSending(true);
+    setError("");
+    setMessages((current) => [...current, optimistic]);
+    try {
+      const attachment = await uploadAttachment(file);
+      await request(`/channels/${activeChannel.id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({
+          content: caption,
+          text: caption,
+          type: "image",
+          mentions: [],
+          mentioned_member_ids: mentionedIds,
+          media_url: attachment.media_url,
+          mime_type: attachment.mime_type,
+          file_name: attachment.file_name,
+        }),
+      });
+      await Promise.all([loadMessages(activeChannel.id), refreshLedger()]);
+    } catch (err) {
+      setMessages((current) => current.filter((message) => message.id !== optimistic.id));
+      showError(err);
+    } finally {
+      URL.revokeObjectURL(previewUrl);
+      setSending(false);
+      if (imageInputRef.current) imageInputRef.current.value = "";
     }
   }
 
@@ -367,10 +455,9 @@ function App() {
 
   async function createChannel(event) {
     event.preventDefault();
-    if (!selectedPersonaIds.length) return;
-    const knownUserIds = users.map((user) => Number(user.id));
-    const userIds = Array.from(new Set([...(currentUser ? [Number(currentUser.id)] : []), ...knownUserIds]));
-    const type = selectedPersonaIds.length === 1 && userIds.length < 2 ? "dm" : "group";
+    if (!selectedPersonaIds.length && !selectedUserIds.length) return;
+    const userIds = Array.from(new Set([...(currentUser ? [Number(currentUser.id)] : []), ...selectedUserIds.map(Number)]));
+    const type = "group";
     const channel = await request("/channels", {
       method: "POST",
       body: JSON.stringify({
@@ -384,8 +471,44 @@ function App() {
     setChannels((current) => [normalized, ...current]);
     setActiveId(normalized.id);
     setSelectedPersonaIds([]);
+    setSelectedUserIds([]);
     setChannelTitle("");
     setSheet(null);
+  }
+
+  async function refreshChannels() {
+    const nextChannels = await request("/channels");
+    setChannels(nextChannels.map(normalizeChannel));
+  }
+
+  async function addChannelMember(memberType, memberId) {
+    if (!activeChannel) return;
+    await request(`/channels/${activeChannel.id}/members`, {
+      method: "POST",
+      body: JSON.stringify({ member_type: memberType, member_id: Number(memberId) }),
+    });
+    await refreshChannels();
+  }
+
+  async function removeChannelMember(member) {
+    if (!activeChannel) return;
+    await request(`/channels/${activeChannel.id}/members/${member.memberType}/${member.id}`, {
+      method: "DELETE",
+    });
+    await refreshChannels();
+  }
+
+  function handleComposerChange(value) {
+    setInput(value);
+    setMentionPickerOpen(activeChannel?.type === "group" && value.endsWith("@"));
+  }
+
+  function selectMentionMember(member) {
+    setMentionedMembers((current) =>
+      current.some((item) => item.channelMemberId === member.channelMemberId) ? current : [...current, member],
+    );
+    setInput((current) => current.replace(/@$/, `@${member.name} `));
+    setMentionPickerOpen(false);
   }
 
   function updatePersonaField(field, value) {
@@ -462,7 +585,7 @@ function App() {
   const stats = summarizeTodos(todos);
   const schedule = buildSchedule(todos);
   const focusTodo = todos.find((todo) => !todo.done && todo.priority === "high") || todos.find((todo) => !todo.done);
-  const activeMembers = activeChannel?.members?.map((member) => member.name).join("、") || "暂无成员";
+  const activeMembers = activeChannel?.members?.map(memberLabel).join("、") || "暂无成员";
 
   if (!currentUser) {
     return (
@@ -613,6 +736,10 @@ function App() {
               <option value="sage">鼠尾草</option>
               <option value="clay">陶土</option>
             </select>
+            <button onClick={() => setSheet("members")}>
+              <Users size={15} />
+              成员
+            </button>
             <button onClick={toggleAIEnabled}>{activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}</button>
             <button onClick={loadMetricsCompare}>读数</button>
             <button onClick={clearChannel}>清空</button>
@@ -652,6 +779,37 @@ function App() {
                 ))}
                 {activeChannel?.type === "group" && <span>AI 默认沉默，@ 或点名更容易触发</span>}
               </div>
+              {(mentionedMembers.length > 0 || mentionPickerOpen) && (
+                <div className="mention-strip">
+                  {mentionedMembers.map((member) => (
+                    <button
+                      type="button"
+                      key={member.channelMemberId}
+                      onClick={() =>
+                        setMentionedMembers((current) =>
+                          current.filter((item) => item.channelMemberId !== member.channelMemberId),
+                        )
+                      }
+                    >
+                      @{member.name}
+                      <X size={12} />
+                    </button>
+                  ))}
+                  {mentionPickerOpen && (
+                    <div className="mention-menu">
+                      {mentionableMembers.length ? (
+                        mentionableMembers.map((member) => (
+                          <button type="button" key={member.channelMemberId} onClick={() => selectMentionMember(member)}>
+                            {memberLabel(member)}
+                          </button>
+                        ))
+                      ) : (
+                        <span>暂无可 @ 的 AI 成员</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               <form
                 className="composer-box"
                 onSubmit={(event) => {
@@ -660,10 +818,19 @@ function App() {
                 }}
               >
                 <IconShell title="附件"><Paperclip size={19} /></IconShell>
-                <IconShell title="图片"><Image size={19} /></IconShell>
+                <IconShell title="图片" onClick={() => imageInputRef.current?.click()}>
+                  <Image size={19} />
+                </IconShell>
+                <input
+                  ref={imageInputRef}
+                  className="hidden-file-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
+                  onChange={(event) => sendImage(event.target.files?.[0])}
+                />
                 <input
                   value={input}
-                  onChange={(event) => setInput(event.target.value)}
+                  onChange={(event) => handleComposerChange(event.target.value)}
                   placeholder={activeChannel?.type === "group" ? "发给频道里的真人；AI 默认旁听…" : "说点什么…"}
                   disabled={!activeChannel || sending}
                 />
@@ -750,6 +917,7 @@ function App() {
             deletePersona={deletePersona}
             startChatWithPersona={startChatWithPersona}
             openSettings={() => setSheet("settings")}
+            users={users}
           />
         )}
       </section>
@@ -769,11 +937,25 @@ function App() {
         open={sheet === "create"}
         onOpenChange={(open) => setSheet(open ? "create" : null)}
         personas={regularPersonas}
+        users={users}
+        currentUser={currentUser}
         selectedIds={selectedPersonaIds}
         setSelectedIds={setSelectedPersonaIds}
+        selectedUserIds={selectedUserIds}
+        setSelectedUserIds={setSelectedUserIds}
         title={channelTitle}
         setTitle={setChannelTitle}
         onSubmit={createChannel}
+      />
+      <MemberSheet
+        open={sheet === "members"}
+        onOpenChange={(open) => setSheet(open ? "members" : null)}
+        channel={activeChannel}
+        personas={regularPersonas}
+        users={users}
+        currentUser={currentUser}
+        onAdd={addChannelMember}
+        onRemove={removeChannelMember}
       />
       <CreateRoleDialog
         open={sheet === "roleCreate"}
@@ -809,6 +991,7 @@ function RolePage({
   deletePersona,
   startChatWithPersona,
   openSettings,
+  users,
 }) {
   if (!activePersona) {
     return (
@@ -845,6 +1028,7 @@ function RolePage({
             <div>
               <h2>{activePersona.name}</h2>
               <p>{activePersona.kind}</p>
+              <p>{personaOwnerLabel(activePersona, users)}</p>
               <div className="role-familiarity">
                 <div><span style={{ width: `${pct}%` }} /></div>
                 <em>熟悉度 {pct}%</em>
@@ -926,20 +1110,21 @@ function TagEditor({ traits, onChange }) {
   );
 }
 
-function IconShell({ title, children }) {
+function IconShell({ title, children, onClick }) {
   return (
-    <button type="button" className="composer-icon" title={title}>
+    <button type="button" className="composer-icon" title={title} onClick={onClick}>
       {children}
     </button>
   );
 }
 
 function MessageBubble({ message, showName }) {
+  const content = <BubbleContent message={message} />;
   if (message.fromSelf) {
     return (
       <div className="message-row outgoing">
         <div className="bubble-stack">
-          <div className="bubble user">{message.text}</div>
+          <div className="bubble user">{content}</div>
           <span>{formatShortTime(message.at)} · {message.status || "已送达"}</span>
         </div>
       </div>
@@ -950,10 +1135,22 @@ function MessageBubble({ message, showName }) {
       <Avatar name={message.senderName} hue={message.avatarHue} />
       <div className="bubble-stack">
         {showName && <em>{message.senderName}</em>}
-        <div className={`bubble ${message.authorType === "human" ? "human" : "ai"}`}>{message.text}</div>
+        <div className={`bubble ${message.authorType === "human" ? "human" : "ai"}`}>{content}</div>
         <span>{formatShortTime(message.at)}</span>
       </div>
     </div>
+  );
+}
+
+function BubbleContent({ message }) {
+  return (
+    <>
+      {message.type === "image" && message.mediaUrl && (
+        <img className="bubble-image" src={message.mediaUrl} alt={message.fileName || "上传图片"} />
+      )}
+      {message.text && <div>{message.text}</div>}
+      {message.type === "image" && !message.text && <div className="media-caption">{message.fileName || "图片"}</div>}
+    </>
   );
 }
 
@@ -1229,8 +1426,12 @@ function CreateChannelDialog({
   open,
   onOpenChange,
   personas,
+  users,
+  currentUser,
   selectedIds,
   setSelectedIds,
+  selectedUserIds,
+  setSelectedUserIds,
   title,
   setTitle,
   onSubmit,
@@ -1240,29 +1441,125 @@ function CreateChannelDialog({
       current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
     );
   }
+  function toggleUser(id) {
+    setSelectedUserIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  }
+  const visiblePersonas = personas.filter(
+    (persona) => !persona.ownerUserId || Number(persona.ownerUserId) === Number(currentUser?.id),
+  );
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Overlay className="sheet-overlay" />
       <Dialog.Content className="modal">
-        <Dialog.Title>新建频道</Dialog.Title>
+        <Dialog.Title>拉人建群</Dialog.Title>
         <form onSubmit={onSubmit}>
           <label>
             群聊标题
-            <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="单选创建私聊，多选创建群聊" />
+            <input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：周末约饭" />
           </label>
           <div className="persona-options">
-            {personas.map((persona) => (
+            <strong>真人成员</strong>
+            {users.map((user) => (
+              <label key={user.id}>
+                <input
+                  type="checkbox"
+                  checked={Number(user.id) === Number(currentUser?.id) || selectedUserIds.includes(user.id)}
+                  disabled={Number(user.id) === Number(currentUser?.id)}
+                  onChange={() => toggleUser(user.id)}
+                />
+                {user.display_name || user.name}·真人
+              </label>
+            ))}
+          </div>
+          <div className="persona-options">
+            <strong>AI 成员</strong>
+            {visiblePersonas.map((persona) => (
               <label key={persona.id}>
                 <input type="checkbox" checked={selectedIds.includes(persona.id)} onChange={() => toggle(persona.id)} />
-                {persona.name}
+                {personaOwnerLabel(persona, users)}
               </label>
             ))}
           </div>
           <div className="modal-actions">
             <Dialog.Close asChild><button type="button">取消</button></Dialog.Close>
-            <button disabled={!selectedIds.length}>创建</button>
+            <button disabled={!selectedIds.length && !selectedUserIds.length}>创建</button>
           </div>
         </form>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function MemberSheet({
+  open,
+  onOpenChange,
+  channel,
+  personas,
+  users,
+  currentUser,
+  onAdd,
+  onRemove,
+}) {
+  const existing = new Set((channel?.members || []).map((member) => `${member.memberType}:${member.id}`));
+  const visiblePersonas = personas.filter(
+    (persona) => !persona.ownerUserId || Number(persona.ownerUserId) === Number(currentUser?.id),
+  );
+  const removable = (member) =>
+    member.memberType !== "agent" ||
+    !member.ownerUserId ||
+    Number(member.ownerUserId) === Number(currentUser?.id);
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Overlay className="sheet-overlay" />
+      <Dialog.Content className="sheet">
+        <Dialog.Title>频道成员</Dialog.Title>
+        <div className="member-manager">
+          <section>
+            <strong>当前成员</strong>
+            {(channel?.members || []).map((member) => (
+              <div className="member-row" key={`${member.memberType}-${member.id}`}>
+                <span>{memberLabel(member)}</span>
+                <button
+                  disabled={!removable(member)}
+                  title={!removable(member) ? "只有 owner 能移除私人 AI" : "移除成员"}
+                  onClick={() => onRemove(member)}
+                >
+                  移除
+                </button>
+              </div>
+            ))}
+          </section>
+          <section>
+            <strong>添加真人</strong>
+            {users.map((user) => (
+              <div className="member-row" key={user.id}>
+                <span>{user.display_name || user.name}·真人</span>
+                <button
+                  disabled={existing.has(`human:${user.id}`)}
+                  onClick={() => onAdd("human", user.id)}
+                >
+                  加入
+                </button>
+              </div>
+            ))}
+          </section>
+          <section>
+            <strong>添加 AI</strong>
+            {visiblePersonas.map((persona) => (
+              <div className="member-row" key={persona.id}>
+                <span>{personaOwnerLabel(persona, users)}</span>
+                <button
+                  disabled={existing.has(`agent:${persona.id}`)}
+                  onClick={() => onAdd("agent", persona.id)}
+                >
+                  加入
+                </button>
+              </div>
+            ))}
+          </section>
+        </div>
       </Dialog.Content>
     </Dialog.Root>
   );
@@ -1325,12 +1622,15 @@ function Empty({ text }) {
 function normalizeChannel(channel) {
   const members = (channel.members || []).map((member) => ({
     id: member.id,
+    channelMemberId: member.channel_member_id || member.channelMemberId,
     memberType: member.member_type || "persona",
     name: member.name,
+    rawName: member.raw_name || member.rawName || member.name,
     role: member.role || member.model_role || (member.is_system ? "管家" : "伙伴"),
     avatarHue: member.avatarHue ?? hueFor(member.name || String(member.id)),
     isAgent: member.isAgent ?? member.member_type !== "human",
     is_system: member.is_system,
+    ownerUserId: member.owner_user_id ?? member.ownerUserId ?? null,
   }));
   const title = channel.title || members.map((member) => member.name).join("、") || "频道";
   return {
@@ -1347,7 +1647,7 @@ function normalizeChannel(channel) {
 }
 
 function normalizeMessage(message) {
-  const currentUserId = Number(localStorage.getItem("user_id") || 0);
+  const currentUserId = Number(sessionStorage.getItem("user_id") || 0);
   const authorType = message.author_type || (message.sender === "persona" ? "ai" : "human");
   const authorUserId = message.author_user_id || null;
   const fromSelf = message.fromSelf ?? (authorType === "human" && Number(authorUserId) === currentUserId);
@@ -1366,6 +1666,9 @@ function normalizeMessage(message) {
     authorUserId,
     type: message.type || "text",
     text: message.text || message.content || "",
+    mediaUrl: message.media_url || message.mediaUrl || "",
+    mimeType: message.mime_type || message.mimeType || "",
+    fileName: message.file_name || message.fileName || "",
     at: message.at || message.created_at || new Date().toISOString(),
     status: message.status === "delivered" ? "已送达" : message.status || "已送达",
     optimistic: message.optimistic,
@@ -1419,6 +1722,7 @@ function normalizePersona(persona) {
     kind: persona.kind || (persona.is_system ? "系统 · 管家" : `AI · ${persona.model_role || "伙伴"}`),
     isAgent: persona.isAgent ?? !persona.is_system,
     is_system: persona.is_system || 0,
+    ownerUserId: persona.owner_user_id ?? persona.ownerUserId ?? null,
     model_role: persona.model_role,
     model_override: persona.model_override,
     sim_config: persona.sim_config,
@@ -1437,6 +1741,25 @@ function normalizePersona(persona) {
   };
 }
 
+function personaOwnerLabel(persona, users = []) {
+  if (!persona?.ownerUserId) {
+    return `${persona?.name || "AI"}·公共AI`;
+  }
+  const owner = users.find((user) => Number(user.id) === Number(persona.ownerUserId));
+  const ownerName = owner?.display_name || owner?.name || `用户#${persona.ownerUserId}`;
+  return `${ownerName}的AI·${persona.name}`;
+}
+
+function memberLabel(member) {
+  if (member.memberType === "human") {
+    return `${member.name}·真人`;
+  }
+  if (member.ownerUserId) {
+    return member.name.includes("的AI·") ? member.name : `${member.name}·私人AI`;
+  }
+  return `${member.name}·公共AI`;
+}
+
 async function normalizeSettings(settings) {
   if (!Array.isArray(settings)) return settings;
   const map = Object.fromEntries(settings.map((item) => [item.key, item.value]));
@@ -1446,6 +1769,7 @@ async function normalizeSettings(settings) {
       chat_strong: map["model.chat_strong"],
       chat_cheap: map["model.chat_cheap"],
       steward: map["model.steward"],
+      vision: map["model.vision"],
     },
     memory: { backend: map["memory.backend"] },
     proactivity: { enabled: map["proactivity.enabled"] === "true" },

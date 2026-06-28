@@ -21,6 +21,10 @@ class MessageCreate(BaseModel):
     text: Optional[str] = None
     type: str = "text"
     mentions: list[str] = []
+    mentioned_member_ids: list[int] = []
+    media_url: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_name: Optional[str] = None
 
 
 class ChannelRead(BaseModel):
@@ -32,6 +36,7 @@ class ChannelRead(BaseModel):
     pinned: Optional[int] = None
     archived: Optional[int] = None
     ai_enabled: bool = True
+    created_by_user_id: Optional[int] = None
     members: list[dict]
 
 
@@ -45,6 +50,10 @@ class MessageRead(BaseModel):
     author_user_id: Optional[int] = None
     author_user_name: Optional[str] = None
     ai_enabled_snapshot: bool = True
+    type: str = "text"
+    media_url: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_name: Optional[str] = None
     content: str
     created_at: str
     status: Optional[str] = None
@@ -62,7 +71,10 @@ class PersonaModelUpdate(BaseModel):
 
 
 class PersonaCardUpdate(BaseModel):
+    owner_user_id: Optional[int] = None
     persona_core: Optional[str] = None
+    self_identity: Optional[str] = None
+    relationship_backstory: Optional[str] = None
     speaking_style: Optional[str] = None
     example_dialogues: Optional[str] = None
     world_info: Optional[str] = None
@@ -86,6 +98,11 @@ class PersonaUpdate(BaseModel):
     style: Optional[str] = None
     voice: Optional[str] = None
     traits: Optional[list[str]] = None
+
+
+class MemberAdd(BaseModel):
+    member_type: str
+    member_id: int
 
 
 class TodoCreate(BaseModel):

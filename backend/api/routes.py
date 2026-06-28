@@ -1,11 +1,15 @@
 import json
+import re
+import uuid
 from datetime import datetime
+from pathlib import Path
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
 from ..chat.memory import build_memory_store
+from ..chat.membership import add_member, list_active_members, member_display_name, remove_member
 from ..chat.service import ChatService
 from ..core.config import list_settings, set_setting
 from ..core.transport import transport
@@ -28,6 +32,7 @@ from ..schemas import (
     ChannelCreate,
     ChannelRead,
     ChannelUpdate,
+    MemberAdd,
     MessageCreate,
     MessageRead,
     PersonaCreate,
@@ -47,6 +52,8 @@ from ..metrics.service import session_metrics
 from ..tools.sqlite_store import SQLiteToolStore
 
 router = APIRouter(prefix="/api")
+UPLOAD_ROOT = Path(__file__).resolve().parent.parent.parent / "uploads"
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
 
 def get_current_user(session: Session, x_user_id: str | None) -> User:
@@ -60,6 +67,13 @@ def get_current_user(session: Session, x_user_id: str | None) -> User:
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user
+
+
+def safe_upload_name(filename: str | None) -> str:
+    raw = filename or "upload"
+    name = Path(raw).name
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
+    return cleaned or "upload"
 
 
 def parse_traits(value: str | None) -> list[str]:
@@ -113,6 +127,8 @@ def ensure_persona_card(session: Session, persona: Persona) -> PersonaCard:
         card = PersonaCard(
             persona_id=persona.id,
             persona_core=persona.system_prompt,
+            self_identity=f"你是 {persona.name}，一个 AI 伙伴。",
+            relationship_backstory=persona.system_prompt,
             speaking_style="",
             example_dialogues="[]",
             traits="[]",
@@ -181,6 +197,9 @@ def persona_profile(session: Session, persona: Persona) -> dict:
         "model_override": persona.model_override,
         "sim_config": persona.sim_config,
         "system_prompt": persona.system_prompt,
+        "owner_user_id": card.owner_user_id,
+        "self_identity": card.self_identity or "",
+        "relationship_backstory": card.relationship_backstory or "",
         "familiarity": state.familiarity if state else 0,
         "voice": card.voice or "",
         "core": core,
@@ -296,6 +315,8 @@ def get_persona_card(persona_id: int) -> PersonaCard:
             card = PersonaCard(
                 persona_id=persona_id,
                 persona_core=persona.system_prompt,
+                self_identity=f"你是 {persona.name}，一个 AI 伙伴。",
+                relationship_backstory=persona.system_prompt,
                 speaking_style="",
                 example_dialogues="[]",
             )
@@ -318,6 +339,8 @@ def update_persona_card(persona_id: int, payload: PersonaCardUpdate) -> PersonaC
         for key, value in data.items():
             if key == "traits":
                 card.traits = json.dumps(value or [], ensure_ascii=False)
+            elif key == "owner_user_id":
+                card.owner_user_id = value
             elif key == "world_info":
                 card.world_info = value or None
             else:
@@ -344,10 +367,18 @@ def list_persona_state() -> list[PersonaState]:
 
 
 @router.post("/channels", response_model=ChannelRead)
-def create_channel(payload: ChannelCreate) -> ChannelRead:
+def create_channel(
+    payload: ChannelCreate,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> ChannelRead:
     with Session(engine) as session:
+        creator = get_current_user(session, x_user_id) if x_user_id else None
         return ChatService(session).create_channel(
-            payload.type, payload.title, payload.persona_ids, payload.user_ids
+            payload.type,
+            payload.title,
+            payload.persona_ids,
+            payload.user_ids,
+            created_by_user_id=creator.id if creator else None,
         )
 
 
@@ -388,6 +419,70 @@ def get_messages(channel_id: int) -> list[MessageRead]:
         return ChatService(session).list_messages(channel_id)
 
 
+@router.get("/channels/{channel_id}/members")
+def get_channel_members(channel_id: int):
+    with Session(engine) as session:
+        channel = ChatService(session).get_channel(channel_id)
+        rows = []
+        for member in list_active_members(session, channel):
+            owner_user_id = None
+            if member.member_type in {"agent", "persona"}:
+                card = session.get(PersonaCard, member.member_id or member.persona_id)
+                owner_user_id = card.owner_user_id if card else None
+            rows.append(
+                {
+                    "id": member.id,
+                    "member_type": member.member_type,
+                    "member_id": member.member_id,
+                    "name": member_display_name(session, member),
+                    "active": bool(member.active),
+                    "added_by_user_id": member.added_by_user_id,
+                    "left_at": member.left_at,
+                    "owner_user_id": owner_user_id,
+                }
+            )
+        return rows
+
+
+@router.post("/channels/{channel_id}/members")
+def add_channel_member(
+    channel_id: int,
+    payload: MemberAdd,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        channel = ChatService(session).get_channel(channel_id)
+        member = add_member(session, channel, payload.member_type, payload.member_id, user.id)
+        return {
+            "id": member.id,
+            "member_type": member.member_type,
+            "member_id": member.member_id,
+            "name": member_display_name(session, member),
+            "active": bool(member.active),
+            "owner_user_id": (
+                session.get(PersonaCard, member.member_id or member.persona_id).owner_user_id
+                if member.member_type in {"agent", "persona"}
+                and session.get(PersonaCard, member.member_id or member.persona_id)
+                else None
+            ),
+        }
+
+
+@router.delete("/channels/{channel_id}/members/{member_type}/{member_id}")
+def remove_channel_member(
+    channel_id: int,
+    member_type: str,
+    member_id: int,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        channel = ChatService(session).get_channel(channel_id)
+        remove_member(session, channel, member_type, member_id, user.id)
+        return {"ok": True}
+
+
 @router.get("/channels/{channel_id}/events")
 async def channel_events(channel_id: int):
     return StreamingResponse(
@@ -395,6 +490,48 @@ async def channel_events(channel_id: int):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/channels/{channel_id}/attachments")
+async def upload_attachment(
+    channel_id: int,
+    file: UploadFile = File(...),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    content_type = file.content_type or "application/octet-stream"
+    if not content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="only image uploads are supported")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        service = ChatService(session)
+        service.get_channel(channel_id)
+        service.ensure_human_member(channel_id, user.id)
+    original_name = safe_upload_name(file.filename)
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+        suffix = {
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+            "image/gif": ".gif",
+            "image/webp": ".webp",
+        }.get(content_type, ".img")
+    target_dir = UPLOAD_ROOT / f"channel_{channel_id}"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{uuid.uuid4().hex}{suffix}"
+    target = target_dir / stored_name
+    target.write_bytes(data)
+    media_url = f"/uploads/channel_{channel_id}/{stored_name}"
+    return {
+        "media_url": media_url,
+        "mime_type": content_type,
+        "file_name": original_name,
+        "size": len(data),
+    }
 
 
 @router.post("/channels/{channel_id}/messages", response_model=list[MessageRead])
@@ -406,7 +543,16 @@ def post_message(
     content = (payload.content or payload.text or "").strip()
     with Session(engine) as session:
         user = get_current_user(session, x_user_id)
-        return ChatService(session).handle_user_message(channel_id, content, user.id)
+        return ChatService(session).handle_user_message(
+            channel_id,
+            content,
+            user.id,
+            message_type=payload.type,
+            media_url=payload.media_url,
+            mime_type=payload.mime_type,
+            file_name=payload.file_name,
+            mentioned_member_ids=payload.mentioned_member_ids,
+        )
 
 
 @router.post("/channels/{channel_id}/ai_enabled")
@@ -639,11 +785,15 @@ def patch_persona(persona_id: int, payload: PersonaUpdate):
 
 
 @router.post("/personas")
-def create_persona(payload: PersonaCreate):
+def create_persona(
+    payload: PersonaCreate,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Persona name is required")
     with Session(engine) as session:
+        owner = get_current_user(session, x_user_id) if x_user_id else None
         existing = session.exec(select(Persona).where(Persona.name == name)).first()
         if existing:
             raise HTTPException(status_code=409, detail="Persona name already exists")
@@ -658,7 +808,10 @@ def create_persona(payload: PersonaCreate):
         session.refresh(persona)
         card = PersonaCard(
             persona_id=persona.id,
+            owner_user_id=owner.id if owner else None,
             persona_core=payload.core or persona.system_prompt,
+            self_identity=f"你是 {persona.name}，一个 AI 伙伴。",
+            relationship_backstory=payload.core or "",
             speaking_style=payload.style or "",
             voice=payload.voice or "",
             traits=json.dumps(payload.traits or [], ensure_ascii=False),

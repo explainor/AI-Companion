@@ -3,11 +3,11 @@ import random
 from dataclasses import dataclass
 from typing import Any
 
-from litellm import completion
 from sqlmodel import Session
 
 from ..core.config import get_setting, resolve_model
-from ..core.llm import provider_ready
+from ..core.llm import counted_completion, provider_ready
+from ..chat.media import message_text_with_media
 from .context import PresenceContext
 
 
@@ -22,10 +22,8 @@ def should_consider(ctx: PresenceContext, cfg: dict[str, Any], session: Session)
         return ConsiderResult(False, "disabled")
     if not ctx.last_human_msg:
         return ConsiderResult(False, "no_human_msg")
-    if ctx.last_mentions_ai:
+    if ctx.mentioned_member_ids:
         return ConsiderResult(True, "mention")
-    if ctx.last_names_ai:
-        return ConsiderResult(True, "named")
     if ctx.seconds_since_last_ai_msg < _int(cfg, "presence.cooldown_seconds", 90):
         return ConsiderResult(False, "cooldown")
     if ctx.ai_msgs_in_last_10_human >= _int(cfg, "presence.max_per_10_human_msgs", 2):
@@ -43,13 +41,16 @@ def cheap_moment_gate(ctx: PresenceContext, cfg: dict[str, Any], session: Sessio
         return ConsiderResult(True, "fallback_gate")
     prompt = (
         "判断现在这个 AI 是否适合插一句话。只看最近几条。\n"
+        f"频道真人参与者：{ctx.participants_label}\n"
+        f"刚刚发言的人：{ctx.last_human_name}\n"
+        "最近对话每行冒号前的名字是真实作者，必须区分不同真人。\n"
         "适合插话的信号：明显冷场/两人都没接话、有人提了个问题没人答得上、出现可以轻松接梗的点。\n"
         "不适合：两人聊得正热、话题私密、刚有人说完一句完整的话还没等对方回。\n"
         '只输出 JSON，无其他文字：{"ok": true|false, "reason": "<=6字"}\n'
         f"最近对话：\n{format_recent_messages(ctx)}"
     )
     try:
-        response = completion(
+        response = counted_completion(
             model=model,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=80,
@@ -67,16 +68,20 @@ def format_recent_messages(ctx: PresenceContext) -> str:
     lines = []
     for message in ctx.recent_messages:
         if message.author_type == "human":
-            who = ctx.human_names.get(message.author_user_id or 0, "真人")
+            user_id = message.author_user_id or 0
+            name = ctx.human_names.get(user_id, f"用户#{user_id or '未知'}")
+            who = f"{name}(真人,user_id={user_id or '未知'})"
         else:
-            who = ctx.persona_name
-        lines.append(f"{who}: {message.content}")
+            who = f"{ctx.persona_name}(AI)"
+        lines.append(f"{who}: {message_text_with_media(message)}")
     return "\n".join(lines)
 
 
 def load_presence_config(session: Session) -> dict[str, str]:
     keys = [
         "presence.enabled",
+        "presence.baseline_interjection_rate",
+        "presence.max_ai_replies_per_turn",
         "presence.base_interjection_prob",
         "presence.cooldown_seconds",
         "presence.max_per_10_human_msgs",
@@ -85,6 +90,9 @@ def load_presence_config(session: Session) -> dict[str, str]:
         "presence.generate_model",
         "presence.tone",
         "presence.recent_window",
+        "memory.public_facts.enabled",
+        "memory.retrieval.enabled",
+        "memory.retrieval.trigger_terms",
     ]
     return {key: get_setting(session, key, "") or "" for key in keys}
 
@@ -121,4 +129,3 @@ def _float(cfg: dict[str, Any], key: str, default: float) -> float:
         return float(cfg.get(key) or default)
     except (TypeError, ValueError):
         return default
-

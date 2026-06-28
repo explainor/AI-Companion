@@ -1,4 +1,5 @@
 import json
+import random
 import re
 import time
 import uuid
@@ -27,6 +28,12 @@ from ..presence.triggers import load_presence_config
 from ..schemas import ChannelRead, MessageRead
 from ..steward.service import StewardService
 from .agents import run_persona_agent
+from .membership import (
+    add_member,
+    agent_display_name,
+    list_active_humans,
+    list_candidate_agents,
+)
 from .memory import build_memory_store
 from .relationship import update_relationship_state
 
@@ -42,6 +49,7 @@ class ChatService(ChatServiceInterface):
         title: Optional[str],
         persona_ids: list[int],
         user_ids: Optional[list[int]] = None,
+        created_by_user_id: int | None = None,
     ) -> ChannelRead:
         user_ids = user_ids or []
         if type_ not in {"dm", "group"}:
@@ -59,23 +67,14 @@ class ChatService(ChatServiceInterface):
             users = self.session.exec(select(User).where(col(User.id).in_(user_ids))).all()
             if len(users) != len(set(user_ids)):
                 raise HTTPException(status_code=400, detail="invalid user_ids")
-        channel = Channel(type=type_, title=title)
+        channel = Channel(type=type_, title=title, created_by_user_id=created_by_user_id)
         self.session.add(channel)
         self.session.commit()
         self.session.refresh(channel)
         for persona_id in persona_ids:
-            self.session.add(
-                ChannelMember(
-                    channel_id=channel.id,
-                    member_type="persona",
-                    persona_id=persona_id,
-                )
-            )
+            add_member(self.session, channel, "agent", persona_id, created_by_user_id)
         for user_id in user_ids:
-            self.session.add(
-                ChannelMember(channel_id=channel.id, member_type="human", user_id=user_id)
-            )
-        self.session.commit()
+            add_member(self.session, channel, "human", user_id, created_by_user_id)
         self.session.refresh(channel)
         return self.read_channel(channel)
 
@@ -90,9 +89,20 @@ class ChatService(ChatServiceInterface):
         ).all()
         return [self.read_message(message) for message in messages]
 
-    def handle_user_message(self, channel_id: int, content: str, user_id: int) -> list[MessageRead]:
+    def handle_user_message(
+        self,
+        channel_id: int,
+        content: str,
+        user_id: int,
+        message_type: str = "text",
+        media_url: str | None = None,
+        mime_type: str | None = None,
+        file_name: str | None = None,
+        mentioned_member_ids: list[int] | None = None,
+    ) -> list[MessageRead]:
         content = content.strip()
-        if not content:
+        message_type = message_type or "text"
+        if not content and not media_url:
             raise HTTPException(status_code=400, detail="content is required")
         channel = self.get_channel(channel_id)
         self.ensure_human_member(channel_id, user_id)
@@ -101,6 +111,10 @@ class ChatService(ChatServiceInterface):
             sender="user",
             author_type="human",
             author_user_id=user_id,
+            message_type=message_type,
+            media_url=media_url,
+            mime_type=mime_type,
+            file_name=file_name,
             content=content,
             ai_enabled_snapshot=bool(channel.ai_enabled),
         )
@@ -126,7 +140,7 @@ class ChatService(ChatServiceInterface):
         if channel.type == "dm":
             responders = members
         else:
-            return self.maybe_interject(channel, recent)
+            return self.maybe_interject(channel, recent, mentioned_member_ids or [])
         replies: list[MessageRead] = []
 
         for persona in responders:
@@ -148,36 +162,122 @@ class ChatService(ChatServiceInterface):
         StewardService(self.session).run_for_user_message(channel_id, recent, content, names)
         return replies
 
-    def maybe_interject(self, channel: Channel, recent: list[Message]) -> list[MessageRead]:
+    def maybe_interject(
+        self,
+        channel: Channel,
+        recent: list[Message],
+        mentioned_member_ids: list[int] | None = None,
+    ) -> list[MessageRead]:
         decision = InterjectionDecision(channel_id=channel.id)
         try:
             if not channel.ai_enabled:
                 decision.trigger_reason = "ai_disabled"
                 return []
-            persona = self.sole_ai_member(channel.id)
-            if not persona:
+            last_message = recent[-1] if recent else None
+            if not last_message or last_message.author_type != "human":
+                decision.trigger_reason = "non_human_message"
+                return []
+            candidate_members = self.active_agent_member_rows(channel.id)
+            if not candidate_members:
                 decision.trigger_reason = "no_persona"
                 return []
             cfg = load_presence_config(self.session)
-            ctx = self.build_presence_context(channel, persona, recent, cfg)
             policy = InterjectionPolicy(self.session, cfg)
-            result = policy.should_consider(ctx)
-            decision.considered = result.considered
-            decision.trigger_reason = result.reason
-            if not result.considered:
+            selected_members = self.speaking_candidate_members(
+                candidate_members,
+                mentioned_member_ids or [],
+                cfg,
+            )
+            selected = [
+                self.session.get(Persona, member.member_id or member.persona_id)
+                for member in selected_members
+            ]
+            selected = [persona for persona in selected if persona]
+            if not selected:
+                decision.trigger_reason = "not_addressed"
                 return []
-            t0 = now_ms()
-            reply = policy.generate_reply(ctx)
-            decision.latency_ms = now_ms() - t0
-            if reply is None:
+            decision.considered = True
+            decision.trigger_reason = "addressed" if mentioned_member_ids else "baseline"
+            replies: list[MessageRead] = []
+            total_latency = 0
+            for persona in selected:
+                ctx = self.build_presence_context(channel, persona, recent, cfg, mentioned_member_ids or [])
+                t0 = now_ms()
+                reply = policy.generate_reply(ctx)
+                total_latency += now_ms() - t0
+                if reply is None:
+                    continue
+                replies.extend(self.persist_persona_reply(channel.id, persona, reply))
+            decision.latency_ms = total_latency
+            if not replies:
                 decision.suppressed_reason = "not_worth_saying"
                 return []
-            replies = self.persist_persona_reply(channel.id, persona, reply)
             decision.spoke = True
             return replies
         finally:
             self.session.add(decision)
             self.session.commit()
+
+    def speaking_candidates(
+        self,
+        candidates: list[Persona],
+        recent: list[Message],
+        cfg: dict[str, str],
+    ) -> list[Persona]:
+        last_message = recent[-1] if recent else None
+        if not last_message or last_message.author_type != "human":
+            return []
+        try:
+            baseline = float(cfg.get("presence.baseline_interjection_rate") or 0)
+        except ValueError:
+            baseline = 0
+        if baseline <= 0 or random.random() >= baseline:
+            return []
+        return candidates[: min(1, self.max_ai_replies_per_turn(cfg))]
+
+    def speaking_candidate_members(
+        self,
+        candidate_members: list[ChannelMember],
+        mentioned_member_ids: list[int],
+        cfg: dict[str, str],
+    ) -> list[ChannelMember]:
+        cap = self.max_ai_replies_per_turn(cfg)
+        by_id = {member.id: member for member in candidate_members if member.id is not None}
+        ordered = []
+        seen = set()
+        for member_id in mentioned_member_ids:
+            if member_id in seen:
+                continue
+            seen.add(member_id)
+            member = by_id.get(member_id)
+            if member:
+                ordered.append(member)
+            if len(ordered) >= cap:
+                return ordered
+        if mentioned_member_ids:
+            return ordered
+        try:
+            baseline = float(cfg.get("presence.baseline_interjection_rate") or 0)
+        except ValueError:
+            baseline = 0
+        if baseline <= 0 or random.random() >= baseline:
+            return []
+        return candidate_members[: min(1, cap)]
+
+    def max_ai_replies_per_turn(self, cfg: dict[str, str]) -> int:
+        try:
+            return max(0, int(cfg.get("presence.max_ai_replies_per_turn") or 1))
+        except ValueError:
+            return 1
+
+    def active_agent_member_rows(self, channel_id: int) -> list[ChannelMember]:
+        return self.session.exec(
+            select(ChannelMember).where(
+                ChannelMember.channel_id == channel_id,
+                ChannelMember.active == True,  # noqa: E712
+                col(ChannelMember.member_type).in_(["agent", "persona"]),
+            ).order_by(ChannelMember.id)
+        ).all()
 
     def persist_persona_reply(
         self,
@@ -279,14 +379,52 @@ class ChatService(ChatServiceInterface):
         return channel
 
     def read_channel(self, channel: Channel) -> ChannelRead:
-        members = self.session.exec(
-            select(Persona)
-            .join(ChannelMember, Persona.id == ChannelMember.persona_id)
-            .where(ChannelMember.channel_id == channel.id, ChannelMember.member_type == "persona")
-            .order_by(Persona.id)
+        member_rows = self.session.exec(
+            select(ChannelMember)
+            .where(ChannelMember.channel_id == channel.id, ChannelMember.active == True)  # noqa: E712
+            .order_by(ChannelMember.id)
         ).all()
-        users = self.channel_users(channel.id)
-        title = members[0].name if channel.type == "dm" and members else channel.title
+        personas: list[Persona] = []
+        members: list[dict] = []
+        for member in member_rows:
+            if member.member_type == "human":
+                user = self.session.get(User, member.member_id or member.user_id)
+                if not user:
+                    continue
+                members.append(
+                    {
+                        "id": user.id,
+                        "channel_member_id": member.id,
+                        "member_type": "human",
+                        "name": user.display_name,
+                        "display_name": user.display_name,
+                    }
+                )
+                continue
+            persona = self.session.get(Persona, member.member_id or member.persona_id)
+            if not persona:
+                continue
+            card = self.session.get(PersonaCard, persona.id)
+            personas.append(persona)
+            members.append(
+                {
+                    "id": persona.id,
+                    "channel_member_id": member.id,
+                    "member_type": "agent",
+                    "name": agent_display_name(self.session, persona),
+                    "raw_name": persona.name,
+                    "is_system": persona.is_system,
+                    "model_role": persona.model_role,
+                    "model_override": persona.model_override,
+                    "sim_config": persona.sim_config,
+                    "owner_user_id": card.owner_user_id if card else None,
+                }
+            )
+        title = (
+            agent_display_name(self.session, personas[0])
+            if channel.type == "dm" and personas
+            else channel.title
+        )
         return ChannelRead(
             id=channel.id,
             type=channel.type,
@@ -296,27 +434,8 @@ class ChatService(ChatServiceInterface):
             pinned=channel.pinned,
             archived=channel.archived,
             ai_enabled=bool(channel.ai_enabled),
-            members=[
-                {
-                    "id": p.id,
-                    "member_type": "persona",
-                    "name": p.name,
-                    "is_system": p.is_system,
-                    "model_role": p.model_role,
-                    "model_override": p.model_override,
-                    "sim_config": p.sim_config,
-                }
-                for p in members
-            ]
-            + [
-                {
-                    "id": u.id,
-                    "member_type": "human",
-                    "name": u.display_name,
-                    "display_name": u.display_name,
-                }
-                for u in users
-            ],
+            created_by_user_id=channel.created_by_user_id,
+            members=members,
         )
 
     def read_message(self, message: Message) -> MessageRead:
@@ -324,7 +443,7 @@ class ChatService(ChatServiceInterface):
         user_name = None
         if message.persona_id:
             persona = self.session.get(Persona, message.persona_id)
-            name = persona.name if persona else None
+            name = agent_display_name(self.session, persona) if persona else None
         if message.author_user_id:
             user = self.session.get(User, message.author_user_id)
             user_name = user.display_name if user else None
@@ -338,6 +457,10 @@ class ChatService(ChatServiceInterface):
             author_user_id=message.author_user_id,
             author_user_name=user_name,
             ai_enabled_snapshot=bool(message.ai_enabled_snapshot),
+            type=message.message_type or "text",
+            media_url=message.media_url,
+            mime_type=message.mime_type,
+            file_name=message.file_name,
             content=message.content,
             created_at=message.created_at,
             status=message.status,
@@ -386,24 +509,10 @@ class ChatService(ChatServiceInterface):
         self.session.commit()
 
     def channel_members(self, channel_id: int) -> list[Persona]:
-        return self.session.exec(
-            select(Persona)
-            .join(ChannelMember, Persona.id == ChannelMember.persona_id)
-            .where(
-                ChannelMember.channel_id == channel_id,
-                ChannelMember.member_type == "persona",
-                Persona.is_system == 0,
-            )
-            .order_by(Persona.id)
-        ).all()
+        return list_candidate_agents(self.session, channel_id)
 
     def channel_users(self, channel_id: int) -> list[User]:
-        return self.session.exec(
-            select(User)
-            .join(ChannelMember, User.id == ChannelMember.user_id)
-            .where(ChannelMember.channel_id == channel_id, ChannelMember.member_type == "human")
-            .order_by(User.id)
-        ).all()
+        return list_active_humans(self.session, channel_id)
 
     def ensure_human_member(self, channel_id: int, user_id: int) -> None:
         user = self.session.get(User, user_id)
@@ -413,13 +522,18 @@ class ChatService(ChatServiceInterface):
             select(ChannelMember).where(
                 ChannelMember.channel_id == channel_id,
                 ChannelMember.member_type == "human",
-                ChannelMember.user_id == user_id,
+                ChannelMember.member_id == user_id,
             )
         ).first()
         if existing:
+            if not existing.active:
+                existing.active = True
+                existing.left_at = None
+                self.session.add(existing)
+                self.session.commit()
             return
-        self.session.add(ChannelMember(channel_id=channel_id, member_type="human", user_id=user_id))
-        self.session.commit()
+        channel = self.get_channel(channel_id)
+        add_member(self.session, channel, "human", user_id, user_id)
 
     def sole_ai_member(self, channel_id: int) -> Persona | None:
         members = self.channel_members(channel_id)
@@ -431,6 +545,7 @@ class ChatService(ChatServiceInterface):
         persona: Persona,
         recent: list[Message],
         cfg: dict[str, str],
+        mentioned_member_ids: list[int] | None = None,
     ) -> PresenceContext:
         try:
             window = int(cfg.get("presence.recent_window") or 12)
@@ -438,6 +553,15 @@ class ChatService(ChatServiceInterface):
             window = 12
         rows = recent[-window:]
         human_names = {user.id: user.display_name for user in self.channel_users(channel.id) if user.id}
+        for message in rows:
+            if message.author_type != "human" or not message.author_user_id:
+                continue
+            if message.author_user_id in human_names:
+                continue
+            user = self.session.get(User, message.author_user_id)
+            human_names[message.author_user_id] = (
+                user.display_name if user else f"用户#{message.author_user_id}"
+            )
         last_human = next((message for message in reversed(rows) if message.author_type == "human"), None)
         last_ai = next((message for message in reversed(rows) if message.author_type == "ai"), None)
         human_seen = 0
@@ -461,6 +585,7 @@ class ChatService(ChatServiceInterface):
             seconds_since_join=seconds_since(channel.created_at),
             last_human_msg=last_human,
             extra_context="",
+            mentioned_member_ids=mentioned_member_ids or [],
         )
 
     def reply_chunks(self, persona: Persona, text: str) -> list[str]:
@@ -509,9 +634,6 @@ class ChatService(ChatServiceInterface):
         except json.JSONDecodeError:
             return {}
 
-    def mentioned_personas(self, content: str, members: list[Persona]) -> list[Persona]:
-        return [persona for persona in members if f"@{persona.name}" in content]
-
     def last_messages(self, channel_id: int, n: int = 20) -> list[Message]:
         rows = self.session.exec(
             select(Message)
@@ -523,7 +645,7 @@ class ChatService(ChatServiceInterface):
 
     def persona_names(self) -> dict[int, str]:
         personas = self.session.exec(select(Persona)).all()
-        return {p.id: p.name for p in personas if p.id is not None}
+        return {p.id: agent_display_name(self.session, p) for p in personas if p.id is not None}
 
 
 def now_ms() -> int:

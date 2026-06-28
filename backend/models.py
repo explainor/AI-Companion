@@ -14,6 +14,8 @@ class Persona(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(unique=True, index=True)
     system_prompt: str
+    model: str = "MODEL_CHAT"
+    is_steward: int = 0
     is_system: int = 0
     model_role: str = Field(default="chat_strong", index=True)
     model_override: Optional[str] = None
@@ -31,6 +33,7 @@ class Channel(SQLModel, table=True):
     pinned: Optional[int] = None
     archived: Optional[int] = None
     ai_enabled: bool = True
+    created_by_user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
 
 
 class ChannelMember(SQLModel, table=True):
@@ -39,8 +42,12 @@ class ChannelMember(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     channel_id: int = Field(foreign_key="channels.id", index=True)
     member_type: str = Field(default="persona", index=True)
+    member_id: Optional[int] = Field(default=None, index=True)
     persona_id: Optional[int] = Field(default=None, foreign_key="personas.id", index=True)
     user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
+    added_by_user_id: Optional[int] = Field(default=None, foreign_key="users.id")
+    active: bool = Field(default=True, index=True)
+    left_at: Optional[str] = None
 
 
 class User(SQLModel, table=True):
@@ -61,6 +68,10 @@ class Message(SQLModel, table=True):
     author_type: str = Field(default="human", index=True)
     author_user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     ai_enabled_snapshot: bool = True
+    message_type: str = Field(default="text", index=True)
+    media_url: Optional[str] = None
+    mime_type: Optional[str] = None
+    file_name: Optional[str] = None
     content: str
     created_at: str = Field(default_factory=now_iso, index=True)
     status: Optional[str] = "delivered"
@@ -93,12 +104,42 @@ class PersonaCard(SQLModel, table=True):
     __tablename__ = "persona_card"
 
     persona_id: int = Field(foreign_key="personas.id", primary_key=True)
+    owner_user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     persona_core: str = ""
+    self_identity: Optional[str] = None
+    relationship_backstory: Optional[str] = None
     speaking_style: str = ""
     example_dialogues: str = "[]"
     world_info: Optional[str] = None
     voice: Optional[str] = None
     traits: str = "[]"
+
+
+class ScopeSummary(SQLModel, table=True):
+    __tablename__ = "scope_summaries"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scope_type: str = Field(index=True)
+    scope_key: str = Field(index=True)
+    content: str = ""
+    last_message_id: Optional[int] = Field(default=None, index=True)
+    updated_at: str = Field(default_factory=now_iso)
+
+
+class MemoryFact(SQLModel, table=True):
+    __tablename__ = "memory_facts"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    scope_type: str = Field(index=True)
+    scope_key: str = Field(index=True)
+    subject_type: str = Field(index=True)
+    subject_id: Optional[int] = Field(default=None, index=True)
+    predicate: str = Field(index=True)
+    content: str
+    source_message_id: int = Field(foreign_key="messages.id", index=True)
+    confidence: float = 1.0
+    supersedes_id: Optional[int] = Field(default=None, foreign_key="memory_facts.id")
+    created_at: str = Field(default_factory=now_iso, index=True)
 
 
 class Todo(SQLModel, table=True):

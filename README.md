@@ -138,3 +138,21 @@ http://服务器IP:8000/
 
 当前身份系统是 v6 要求的“薄身份，无密码”。它适合熟人测试和小范围验证，不适合作为公开产品账号体系。
 
+## 本地回归测试
+
+每次改完双人频道、身份、presence 或 metrics 相关代码，先在本地跑：
+
+```powershell
+python scripts\smoke_two_users.py
+python -m compileall backend scripts
+cd frontend
+npm run build
+```
+
+`smoke_two_users.py` 会创建两个临时用户、一个双人群聊和两条消息，然后检查：
+
+- 两条真人消息是否分别写入不同的 `author_user_id`
+- AI presence 上下文是否同时包含两个真人名字
+- 最近对话是否按真实作者渲染
+
+通过后再提交、推送、部署到服务器。

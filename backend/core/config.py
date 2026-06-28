@@ -12,6 +12,7 @@ DEFAULT_MODEL_SETTINGS = {
     "model.chat_strong": "openai/deepseek-chat",
     "model.chat_cheap": "openai/qwen3.5-27b",
     "model.steward": "openai/deepseek-chat",
+    "model.vision": "openai/glm-5.1",
     "model.catalog.sjtu": (
         "["
         '{"label":"DeepSeek V3.2 常规模式","model":"openai/deepseek-chat"},'
@@ -28,14 +29,19 @@ DEFAULT_MODEL_SETTINGS = {
     "proactivity.interval_minutes": "30",
     "proactivity.speaker_persona_id": "",
     "proactivity.channel_id": "",
-    "memory.backend": "mem0",
+    "memory.backend": "sqlite",
     "memory.mem0.vector_store": "chroma",
     "memory.mem0.path": ".mem0",
     "memory.extract_every_n_messages": "4",
+    "memory.public_facts.enabled": "false",
+    "memory.retrieval.enabled": "gated",
+    "memory.retrieval.trigger_terms": "记得,还记得,上次,之前,以前,那个,那件事,刚才说的,前面说的",
     "relationship.familiarity_gain": "0.04",
     "relationship.familiarity_decay_per_day": "0.01",
     "relationship.max_familiarity": "1.0",
     "presence.enabled": "true",
+    "presence.baseline_interjection_rate": "0",
+    "presence.max_ai_replies_per_turn": "1",
     "presence.base_interjection_prob": "0.08",
     "presence.cooldown_seconds": "90",
     "presence.max_per_10_human_msgs": "2",
@@ -52,6 +58,22 @@ def seed_settings(session: Session) -> None:
         existing = session.get(Setting, key)
         if not existing:
             session.add(Setting(key=key, value=value))
+    migration_key = "memory.backend.sqlite_default_migrated"
+    migration = session.get(Setting, migration_key)
+    backend = session.get(Setting, "memory.backend")
+    if not migration:
+        if backend and backend.value == "mem0":
+            backend.value = "sqlite"
+            session.add(backend)
+        session.add(Setting(key=migration_key, value="true"))
+    vision_migration_key = "model.vision.glm_default_migrated"
+    vision_migration = session.get(Setting, vision_migration_key)
+    vision = session.get(Setting, "model.vision")
+    if not vision_migration:
+        if vision and vision.value == "openai/qwen3.5-27b":
+            vision.value = "openai/glm-5.1"
+            session.add(vision)
+        session.add(Setting(key=vision_migration_key, value="true"))
     session.commit()
 
 
