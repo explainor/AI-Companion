@@ -139,15 +139,38 @@ def normalized_persona_kind(raw: str | None, default: str = "owned") -> str:
     return value
 
 
-def ensure_can_edit_persona(session: Session, persona: Persona, user: User) -> None:
-    card = ensure_persona_card(session, persona)
+def require_persona_editable(
+    session: Session,
+    persona_id: int,
+    x_user_id: str | None,
+) -> tuple[Persona, User]:
+    user = get_current_user(session, x_user_id)
+    persona = session.get(Persona, persona_id)
+    if not persona:
+        raise HTTPException(status_code=404, detail="Persona not found")
+    if persona.kind == "system" or persona.is_system:
+        raise HTTPException(status_code=403, detail="System AI cannot be edited through the public API")
     if persona.kind == "entertainment":
-        if persona.creator_user_id != user.id:
-            raise HTTPException(status_code=403, detail="Only the creator can edit this entertainment AI; clone it first")
-        return
-    owner_id = card.owner_user_id or persona.creator_user_id
-    if owner_id != user.id:
+        raise HTTPException(status_code=403, detail="Entertainment AI is read-only through the public API; clone it first")
+    if persona.kind != "owned" or persona.creator_user_id != user.id:
         raise HTTPException(status_code=403, detail="Only the owner can edit this AI")
+    return persona, user
+
+
+def can_remove_channel_member(
+    session: Session,
+    channel: Channel,
+    member_type: str,
+    member_id: int,
+    user: User,
+) -> bool:
+    if channel.created_by_user_id == user.id:
+        return True
+    normalized = "agent" if member_type in {"agent", "persona", "ai"} else "human"
+    if normalized == "human":
+        return member_id == user.id
+    card = session.get(PersonaCard, member_id)
+    return bool(card and card.owner_user_id == user.id)
 
 
 def ensure_owned_quota(session: Session, user_id: int) -> None:
@@ -380,11 +403,13 @@ def get_persona(persona_id: int):
 
 
 @router.patch("/personas/{persona_id}/model")
-def update_persona_model(persona_id: int, payload: PersonaModelUpdate) -> Persona:
+def update_persona_model(
+    persona_id: int,
+    payload: PersonaModelUpdate,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> Persona:
     with Session(engine) as session:
-        persona = session.get(Persona, persona_id)
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
+        persona, _user = require_persona_editable(session, persona_id, x_user_id)
         if payload.model_role is not None:
             persona.model_role = payload.model_role
         if payload.model_override is not None:
@@ -426,11 +451,7 @@ def update_persona_card(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ) -> PersonaCard:
     with Session(engine) as session:
-        user = get_current_user(session, x_user_id)
-        persona = session.get(Persona, persona_id)
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
-        ensure_can_edit_persona(session, persona, user)
+        persona, _user = require_persona_editable(session, persona_id, x_user_id)
         card = session.get(PersonaCard, persona_id)
         if not card:
             card = PersonaCard(persona_id=persona_id)
@@ -578,6 +599,8 @@ def remove_channel_member(
     with Session(engine) as session:
         user = get_current_user(session, x_user_id)
         channel = ChatService(session).get_channel(channel_id)
+        if not can_remove_channel_member(session, channel, member_type, member_id, user):
+            raise HTTPException(status_code=403, detail="Only the channel creator or that member can remove this member")
         remove_member(session, channel, member_type, member_id, user.id)
         return {"ok": True}
 
@@ -852,6 +875,8 @@ def patch_settings(payload: dict):
         flattened = flatten_settings(payload)
         saved = []
         for key, value in flattened.items():
+            if key.startswith("admin."):
+                raise HTTPException(status_code=403, detail="Admin settings can only be changed in /admin")
             saved.append(set_setting(session, key, str(value).lower() if isinstance(value, bool) else str(value)))
         return saved
 
@@ -863,11 +888,7 @@ def patch_persona(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     with Session(engine) as session:
-        user = get_current_user(session, x_user_id)
-        persona = session.get(Persona, persona_id)
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
-        ensure_can_edit_persona(session, persona, user)
+        persona, _user = require_persona_editable(session, persona_id, x_user_id)
         if payload.name is not None:
             persona.name = payload.name.strip() or persona.name
         if payload.core is not None:
@@ -943,6 +964,8 @@ def clone_persona(
         source = session.get(Persona, persona_id)
         if not source:
             raise HTTPException(status_code=404, detail="Persona not found")
+        if source.kind != "entertainment":
+            raise HTTPException(status_code=400, detail="Only entertainment AI can be cloned")
         ensure_owned_quota(session, user.id)
         source_card = ensure_persona_card(session, source)
         base_name = f"{source.name}（{user.display_name}的版本）"
@@ -986,13 +1009,12 @@ def clone_persona(
 
 
 @router.delete("/personas/{persona_id}")
-def delete_persona(persona_id: int):
+def delete_persona(
+    persona_id: int,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
     with Session(engine) as session:
-        persona = session.get(Persona, persona_id)
-        if not persona:
-            raise HTTPException(status_code=404, detail="Persona not found")
-        if persona.is_system:
-            raise HTTPException(status_code=400, detail="System persona cannot be deleted")
+        persona, _user = require_persona_editable(session, persona_id, x_user_id)
         for model in (PersonaCard, PersonaState):
             row = session.get(model, persona_id)
             if row:
@@ -1008,6 +1030,8 @@ def delete_persona(persona_id: int):
 
 @router.put("/settings/{key}")
 def put_setting(key: str, payload: SettingUpdate):
+    if key.startswith("admin."):
+        raise HTTPException(status_code=403, detail="Admin settings can only be changed in /admin")
     with Session(engine) as session:
         return set_setting(session, key, payload.value)
 

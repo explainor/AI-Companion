@@ -43,6 +43,7 @@ DEFAULT_MODEL_SETTINGS = {
     "presence.baseline_interjection_rate": "0",
     "presence.max_ai_replies_per_turn": "1",
     "presence.base_interjection_prob": "0.08",
+    "presence.interjection_probability": "0.08",
     "presence.cooldown_seconds": "90",
     "presence.max_per_10_human_msgs": "2",
     "presence.silence_on_startup_seconds": "30",

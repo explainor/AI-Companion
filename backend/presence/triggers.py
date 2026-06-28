@@ -30,7 +30,8 @@ def should_consider(ctx: PresenceContext, cfg: dict[str, Any], session: Session)
         return ConsiderResult(False, "ceiling")
     if ctx.seconds_since_join < _int(cfg, "presence.silence_on_startup_seconds", 30):
         return ConsiderResult(False, "warmup")
-    if random.random() > _float(cfg, "presence.base_interjection_prob", 0.08):
+    interjection_prob = cfg.get("presence.interjection_probability") or cfg.get("presence.base_interjection_prob")
+    if random.random() > _float({"value": interjection_prob}, "value", 0.08):
         return ConsiderResult(False, "below_base_rate")
     return cheap_moment_gate(ctx, cfg, session)
 
@@ -83,6 +84,7 @@ def load_presence_config(session: Session) -> dict[str, str]:
         "presence.baseline_interjection_rate",
         "presence.max_ai_replies_per_turn",
         "presence.base_interjection_prob",
+        "presence.interjection_probability",
         "presence.cooldown_seconds",
         "presence.max_per_10_human_msgs",
         "presence.silence_on_startup_seconds",

@@ -4,4 +4,6 @@ mem0ai>=0.1.114
 python-dotenv>=1.0.0
 python-multipart>=0.0.9
 sqlmodel>=0.0.22
+starlette-admin>=0.16.1
 uvicorn[standard]>=0.30.0
+bcrypt>=3.2.0

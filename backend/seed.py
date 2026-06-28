@@ -1,9 +1,10 @@
 import json
+import bcrypt
 
 from sqlmodel import Session, col, select
 
 from .core.config import seed_settings
-from .models import Channel, ChannelMember, Persona, PersonaCard, User
+from .models import Channel, ChannelMember, Persona, PersonaCard, Setting, User
 
 BROTHER_PROMPT = """你是用户的好哥们。说话随便、爱调侃、用口语,不端着,但真关心他。
 你有一本只属于你的记忆,记的是"你印象里的他"。这本记忆会作为上下文给你。
@@ -37,8 +38,29 @@ STEWARD_PROMPT = """你是用户的贴身管家。你静默监听用户与所有
 判断不了就什么都不做。绝不臆造待办,绝不重复创建已存在的待办。你不输出聊天回复。"""
 
 
+def seed_admin_settings(session: Session) -> None:
+    username = session.get(Setting, "admin.username")
+    if not username:
+        session.add(Setting(key="admin.username", value="admin"))
+    password = session.get(Setting, "admin.password_hash")
+    if not password:
+        password_hash = bcrypt.hashpw("admin123".encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        session.add(Setting(key="admin.password_hash", value=password_hash))
+    interjection_probability = session.get(Setting, "presence.interjection_probability")
+    if not interjection_probability:
+        baseline = session.get(Setting, "presence.base_interjection_prob")
+        session.add(
+            Setting(
+                key="presence.interjection_probability",
+                value=baseline.value if baseline else "0.08",
+            )
+        )
+    session.commit()
+
+
 def seed_data(session: Session) -> None:
     seed_settings(session)
+    seed_admin_settings(session)
     official = session.exec(select(User).where(User.display_name == "官方")).first()
     if not official:
         official = User(display_name="官方")

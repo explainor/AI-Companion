@@ -443,6 +443,10 @@ p {
   gap: 8px;
 }
 
+.member-picker-wrap {
+  position: relative;
+}
+
 .topbar-actions button,
 .topbar-actions select,
 .segmented {
@@ -1699,6 +1703,172 @@ p {
 .member-row button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
+}
+
+.member-popover {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  display: grid;
+  gap: 10px;
+  max-height: min(640px, calc(100vh - 92px));
+  overflow: hidden;
+  padding: 12px;
+  position: absolute;
+  right: 0;
+  top: 42px;
+  width: min(380px, calc(100vw - 28px));
+  z-index: 50;
+}
+
+.member-popover-head,
+.member-tabs,
+.member-pick {
+  align-items: center;
+  display: flex;
+}
+
+.member-popover-head {
+  justify-content: space-between;
+}
+
+.member-popover-head strong {
+  font-size: 14px;
+}
+
+.member-popover-head button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: var(--text-3);
+  display: flex;
+  height: 28px;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+
+.member-tabs {
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  gap: 2px;
+  padding: 3px;
+}
+
+.member-tabs button {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-3);
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  height: 28px;
+}
+
+.member-tabs button.active {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.member-search {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  height: 36px;
+  min-width: 0;
+  outline: none;
+  padding: 0 10px;
+}
+
+.member-popover-body {
+  display: grid;
+  gap: 13px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.member-popover-body section {
+  display: grid;
+  gap: 7px;
+}
+
+.member-section-title {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.member-row.compact {
+  min-height: 34px;
+  padding: 5px 7px;
+}
+
+.member-row.compact button {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  padding: 0;
+  width: 28px;
+}
+
+.member-pick {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  gap: 9px;
+  min-height: 42px;
+  padding: 6px 8px;
+  text-align: left;
+  width: 100%;
+}
+
+.member-pick:hover {
+  background: var(--active-bg);
+}
+
+.member-pick .avatar {
+  height: 30px;
+  width: 30px;
+}
+
+.member-pick span {
+  flex: 1;
+  font-size: 13px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-pick em {
+  align-items: center;
+  background: var(--accent-soft);
+  border-radius: 999px;
+  color: var(--text-2);
+  display: inline-flex;
+  flex: none;
+  font-size: 11px;
+  font-style: normal;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+}
+
+.member-empty {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-3);
+  font-size: 12px;
+  padding: 10px;
+  text-align: center;
 }
 
 .modal {

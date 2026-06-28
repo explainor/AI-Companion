@@ -126,7 +126,6 @@ def remove_member(
     requested_by_user_id: int | None,
 ) -> None:
     member_type = normalize_member_type(member_type)
-    _enforce_private_agent_owner(session, member_type, member_id, requested_by_user_id)
     member = find_member(session, channel.id, member_type, member_id)
     if not member or not member.active:
         raise HTTPException(status_code=404, detail="Member not found")

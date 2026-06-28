@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   Image,
+  Star,
   Users,
   Mic,
   Paperclip,
@@ -192,7 +193,7 @@ function App() {
         request("/memos"),
         request("/habits"),
         request("/relations").catch(() => request("/persona-state")),
-        request("/personas"),
+        request("/personas?include_system=true"),
         request("/settings").then(normalizeSettings),
         request("/steward/brief").catch(() => null),
         request("/users").catch(() => []),
@@ -389,7 +390,7 @@ function App() {
       request("/memos"),
       request("/habits"),
       request("/relations").catch(() => request("/persona-state")),
-      request("/personas"),
+      request("/personas?include_system=true"),
       request("/steward/brief").catch(() => null),
     ]);
     setTodos(nextTodos.map(normalizeTodo));
@@ -488,6 +489,7 @@ function App() {
       body: JSON.stringify({ member_type: memberType, member_id: Number(memberId) }),
     });
     await refreshChannels();
+    await refreshLedger();
   }
 
   async function removeChannelMember(member) {
@@ -736,10 +738,21 @@ function App() {
               <option value="sage">鼠尾草</option>
               <option value="clay">陶土</option>
             </select>
-            <button onClick={() => setSheet("members")}>
-              <Users size={15} />
-              成员
-            </button>
+            <div className="member-picker-wrap">
+              <button className="icon-button" onClick={() => setSheet(sheet === "members" ? null : "members")} title="添加成员">
+                <Plus size={17} />
+              </button>
+              <MemberSheet
+                open={sheet === "members"}
+                onOpenChange={(open) => setSheet(open ? "members" : null)}
+                channel={activeChannel}
+                personas={personas}
+                users={users}
+                currentUser={currentUser}
+                onAdd={addChannelMember}
+                onRemove={removeChannelMember}
+              />
+            </div>
             <button onClick={toggleAIEnabled}>{activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}</button>
             <button onClick={loadMetricsCompare}>读数</button>
             <button onClick={clearChannel}>清空</button>
@@ -946,16 +959,6 @@ function App() {
         title={channelTitle}
         setTitle={setChannelTitle}
         onSubmit={createChannel}
-      />
-      <MemberSheet
-        open={sheet === "members"}
-        onOpenChange={(open) => setSheet(open ? "members" : null)}
-        channel={activeChannel}
-        personas={regularPersonas}
-        users={users}
-        currentUser={currentUser}
-        onAdd={addChannelMember}
-        onRemove={removeChannelMember}
       />
       <CreateRoleDialog
         open={sheet === "roleCreate"}
@@ -1502,6 +1505,138 @@ function MemberSheet({
   onAdd,
   onRemove,
 }) {
+  const [tab, setTab] = useState("humans");
+  const [query, setQuery] = useState("");
+  if (!open) return null;
+  const existing = new Set((channel?.members || []).map((member) => `${member.memberType}:${member.id}`));
+  const normalizedQuery = query.trim().toLowerCase();
+  const isCreator = Number(channel?.createdByUserId) === Number(currentUser?.id);
+  const matches = (value) => String(value || "").toLowerCase().includes(normalizedQuery);
+  const humans = users.filter(
+    (user) =>
+      Number(user.id) !== Number(currentUser?.id) &&
+      !existing.has(`human:${user.id}`) &&
+      (!normalizedQuery || matches(user.display_name || user.name)),
+  );
+  const availablePersonas = personas.filter(
+    (persona) => !existing.has(`agent:${persona.id}`) && (!normalizedQuery || matches(persona.name)),
+  );
+  const myAi = availablePersonas.filter(
+    (persona) =>
+      (persona.personaKind === "owned" && Number(persona.creatorUserId) === Number(currentUser?.id)) ||
+      (persona.personaKind === "system" && Number(persona.ownerUserId || persona.creatorUserId) === Number(currentUser?.id)),
+  );
+  const entertainmentAi = availablePersonas.filter((persona) => persona.personaKind === "entertainment");
+  const removable = (member) => {
+    if (isCreator) return true;
+    if (member.memberType === "human") return Number(member.id) === Number(currentUser?.id);
+    return Number(member.ownerUserId) === Number(currentUser?.id);
+  };
+  const addAndKeepOpen = async (memberType, memberId) => {
+    await onAdd(memberType, memberId);
+  };
+  const removeAndKeepOpen = async (member) => {
+    await onRemove(member);
+  };
+  return (
+    <div className="member-popover">
+      <div className="member-popover-head">
+        <strong>添加成员</strong>
+        <button type="button" onClick={() => onOpenChange(false)} title="关闭">
+          <X size={14} />
+        </button>
+      </div>
+      <div className="member-tabs">
+        <button className={tab === "humans" ? "active" : ""} onClick={() => setTab("humans")}>
+          真人
+        </button>
+        <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>
+          AI
+        </button>
+      </div>
+      <input
+        className="member-search"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="搜索成员"
+      />
+      <div className="member-popover-body">
+        <section>
+          <div className="member-section-title">当前成员</div>
+          {(channel?.members || []).map((member) => (
+            <div className="member-row compact" key={`${member.memberType}-${member.id}`}>
+              <span>{memberLabel(member)}</span>
+              <button
+                disabled={!removable(member)}
+                title={!removable(member) ? "只有频道创建者或该成员可以移除" : "移除成员"}
+                onClick={() => removeAndKeepOpen(member)}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </section>
+        {tab === "humans" && (
+          <section>
+            <div className="member-section-title">真人</div>
+            {humans.length ? (
+              humans.map((user) => (
+                <button className="member-pick" key={user.id} onClick={() => addAndKeepOpen("human", user.id)}>
+                  <Avatar name={user.display_name || user.name} hue={hueFor(user.display_name || user.name)} />
+                  <span>{user.display_name || user.name}</span>
+                </button>
+              ))
+            ) : (
+              <div className="member-empty">没有可添加的真人</div>
+            )}
+          </section>
+        )}
+        {tab === "ai" && (
+          <>
+            <section>
+              <div className="member-section-title">我的 AI</div>
+              {myAi.length ? (
+                myAi.map((persona) => (
+                  <button className="member-pick" key={persona.id} onClick={() => addAndKeepOpen("agent", persona.id)}>
+                    <Avatar name={persona.name} hue={persona.avatarHue} />
+                    <span>{personaOwnerLabel(persona, users)}</span>
+                    {persona.personaKind === "system" && <em><Star size={12} /> 管家</em>}
+                  </button>
+                ))
+              ) : (
+                <div className="member-empty">没有可添加的自有 AI</div>
+              )}
+            </section>
+            <section>
+              <div className="member-section-title">娱乐 AI</div>
+              {entertainmentAi.length ? (
+                entertainmentAi.map((persona) => (
+                  <button className="member-pick" key={persona.id} onClick={() => addAndKeepOpen("agent", persona.id)}>
+                    <Avatar name={persona.name} hue={persona.avatarHue} />
+                    <span>{persona.name}</span>
+                  </button>
+                ))
+              ) : (
+                <div className="member-empty">没有可添加的娱乐 AI</div>
+              )}
+            </section>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LegacyMemberSheet({
+  open,
+  onOpenChange,
+  channel,
+  personas,
+  users,
+  currentUser,
+  onAdd,
+  onRemove,
+}) {
   const existing = new Set((channel?.members || []).map((member) => `${member.memberType}:${member.id}`));
   const visiblePersonas = personas.filter(
     (persona) => !persona.ownerUserId || Number(persona.ownerUserId) === Number(currentUser?.id),
@@ -1639,6 +1774,7 @@ function normalizeChannel(channel) {
     title,
     members,
     is_system: channel.is_system,
+    createdByUserId: channel.created_by_user_id ?? channel.createdByUserId ?? null,
     aiEnabled: channel.ai_enabled ?? true,
     avatarHue: channel.avatarHue ?? (members[0]?.avatarHue || hueFor(title)),
     lastMessage: channel.lastMessage || null,
@@ -1720,6 +1856,8 @@ function normalizePersona(persona) {
     name: persona.name || `Persona #${persona.id}`,
     avatarHue: persona.avatarHue ?? hueFor(persona.name || String(persona.id)),
     kind: persona.kind || (persona.is_system ? "系统 · 管家" : `AI · ${persona.model_role || "伙伴"}`),
+    personaKind: persona.persona_kind || persona.kind || (persona.is_system ? "system" : "entertainment"),
+    creatorUserId: persona.creator_user_id ?? persona.creatorUserId ?? null,
     isAgent: persona.isAgent ?? !persona.is_system,
     is_system: persona.is_system || 0,
     ownerUserId: persona.owner_user_id ?? persona.ownerUserId ?? null,
