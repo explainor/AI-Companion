@@ -46,7 +46,7 @@
 
 
 
-## 当前代码快照（Codex 最后更新：2026-06-28）
+## 当前代码快照（Codex 最后更新：2026-06-29）
 
 ### 后端文件树
 
@@ -105,8 +105,8 @@ backend/
 
 ```text
 frontend/src/
-├── App.jsx       # React 主入口与全部页面/面板组件；群聊成员 + 下拉面板在此实现。
-└── styles.css    # 全局样式、三栏布局、聊天气泡、右侧面板、成员下拉面板和响应式规则。
+├── App.jsx       # React 主入口与全部页面/面板组件；群聊、角色页、管家 dock、成员下拉面板、移动端工作台抽屉在此实现。
+└── styles.css    # 全局样式、三栏布局、聊天气泡、右侧面板、成员下拉面板、动效层和响应式规则。
 ```
 
 ### 数据库表结构
@@ -204,6 +204,7 @@ GET      /admin                          # 精确重定向到 /admin/
 - [x] 群聊顶部 `+` 成员面板：真人 / AI 双标签、搜索、已在频道成员过滤、点击即加入。
 - [x] AI 面板分组：我的 AI 显示当前用户 owned 与 system 管家，娱乐 AI 显示全部 entertainment；他人 owned 不展示。
 - [x] 成员面板当前成员列表带移除按钮，前端按创建者/本人/AI owner 判断可用性，后端同步守卫。
+- [x] Claude Design 前端 polish：成员入口打开态、消息/角色/管家轻量动效、右侧 tab 切换动画、debug 面板默认折叠、移动端右侧工作台抽屉和成员底部弹层。
 - [x] 角色生成层返回消息段数组；保存时每段独立落库并推送，typing 延迟复用原机制。
 - [x] 群聊多段上限 `presence.max_segments_group=2`，私聊上限 `presence.max_segments_dm=4`。
 - [x] persona 三分类落库：`entertainment` / `owned` / `system`，并记录 `creator_user_id`。
@@ -258,9 +259,9 @@ class ChatService:
 
 ### 扫描备注
 
-- 后端扫描：37 个 `.py` 文件；PowerShell 环境中 Unix `find` 参数不可用，本次用等价 `Get-ChildItem -Recurse -Filter *.py` 扫描。
+- 后端扫描：37 个 `.py` 文件；本次用 `rg --files backend` 扫描。
 - 前端扫描：2 个 `frontend/src` 文件。
-- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列，只新增 settings seed key。
+- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列，只做前端视觉与交互 polish。
 - API 路由扫描：发现 45 条 `@router.*` 路由；admin 为 Starlette mount，不在 `@router` 清单内。
 - 必跑检查：`python -m compileall backend scripts` 通过；`python scripts/smoke_two_users.py` 通过；`npm.cmd run build` 通过。
-- 额外探针：普通 persona 权限、克隆、成员移除守卫、`/api/settings/admin.*` 拒绝、admin 登录/错误密码/admin 两个 list view 均通过。
+- 本轮归档 Instruction：`docs/specs/20260629_frontend_motion_polish_instruction.md`。

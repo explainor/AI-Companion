@@ -18,6 +18,7 @@ import {
   Settings,
   Smile,
   Trash2,
+  UserPlus,
   X,
 } from "lucide-react";
 import "./styles.css";
@@ -71,6 +72,8 @@ function App() {
   const [stewardTyping, setStewardTyping] = useState(false);
   const [tab, setTab] = useState("today");
   const [sheet, setSheet] = useState(null);
+  const [showDebug, setShowDebug] = useState(false);
+  const [paneOpen, setPaneOpen] = useState(false);
   const [selectedPersonaIds, setSelectedPersonaIds] = useState([]);
   const [activePersonaId, setActivePersonaId] = useState(null);
   const [channelTitle, setChannelTitle] = useState("");
@@ -739,8 +742,13 @@ function App() {
               <option value="clay">陶土</option>
             </select>
             <div className="member-picker-wrap">
-              <button className="icon-button" onClick={() => setSheet(sheet === "members" ? null : "members")} title="添加成员">
-                <Plus size={17} />
+              <button
+                className={sheet === "members" ? "icon-button is-open" : "icon-button"}
+                onClick={() => setSheet(sheet === "members" ? null : "members")}
+                title="添加成员"
+                aria-expanded={sheet === "members"}
+              >
+                <UserPlus size={17} />
               </button>
               <MemberSheet
                 open={sheet === "members"}
@@ -857,7 +865,7 @@ function App() {
             </div>
           </section>
 
-          <aside className="right-pane">
+          <aside className={paneOpen ? "right-pane mobile-open" : "right-pane"}>
             <div className="tabs">
               {[
                 ["today", "今日", null],
@@ -869,38 +877,50 @@ function App() {
                   {badge && <span>{badge}</span>}
                 </button>
               ))}
+              <button className="icon-button pane-close" onClick={() => setPaneOpen(false)} aria-label="关闭工作台">
+                <X size={15} />
+              </button>
             </div>
 
             <div className="side-scroll">
-              <section className="debug-panel">
-                <div>
-                  <strong>催化剂读数</strong>
-                  <span>{activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}</span>
-                </div>
-                <button onClick={loadMetricsCompare}>刷新 compare()</button>
-                {metrics && <pre>{JSON.stringify(metrics, null, 2)}</pre>}
+              <section className={showDebug ? "debug-panel open" : "debug-panel"}>
+                <button className="debug-head" onClick={() => setShowDebug((value) => !value)}>
+                  <span>
+                    <strong>催化剂读数</strong>
+                    <em>{activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}</em>
+                  </span>
+                  <ChevronDown size={15} />
+                </button>
+                {showDebug && (
+                  <>
+                    <button className="debug-refresh" onClick={loadMetricsCompare}>刷新 compare()</button>
+                    {metrics && <pre>{JSON.stringify(metrics, null, 2)}</pre>}
+                  </>
+                )}
               </section>
-              {tab === "today" && (
-                <TodayPanel
-                  brief={stewardBrief}
-                  focusTodo={focusTodo}
-                  schedule={schedule}
-                  stats={stats}
-                  habits={habits}
-                  onStart={() => focusTodo && sendMessage(`我准备去做：${focusTodo.title}`)}
-                />
-              )}
-              {tab === "tasks" && (
-                <TasksPanel
-                  todos={todos}
-                  draft={todoDraft}
-                  setDraft={setTodoDraft}
-                  onCreate={createTodo}
-                  onToggle={toggleTodo}
-                  onDelete={deleteTodo}
-                />
-              )}
-              {tab === "memory" && <MemoryPanel memos={memos} habits={habits} relations={relations} />}
+              <div className="side-panel-anim" key={tab}>
+                {tab === "today" && (
+                  <TodayPanel
+                    brief={stewardBrief}
+                    focusTodo={focusTodo}
+                    schedule={schedule}
+                    stats={stats}
+                    habits={habits}
+                    onStart={() => focusTodo && sendMessage(`我准备去做：${focusTodo.title}`)}
+                  />
+                )}
+                {tab === "tasks" && (
+                  <TasksPanel
+                    todos={todos}
+                    draft={todoDraft}
+                    setDraft={setTodoDraft}
+                    onCreate={createTodo}
+                    onToggle={toggleTodo}
+                    onDelete={deleteTodo}
+                  />
+                )}
+                {tab === "memory" && <MemoryPanel memos={memos} habits={habits} relations={relations} />}
+              </div>
             </div>
             {stewardChannel && (
               <StewardDock
@@ -917,6 +937,9 @@ function App() {
               />
             )}
           </aside>
+          <button className="pane-fab" onClick={() => setPaneOpen(true)} aria-label="打开工作台">
+            <Bell size={20} />
+          </button>
         </div>
           </>
         )}
@@ -1033,7 +1056,7 @@ function RolePage({
               <p>{activePersona.kind}</p>
               <p>{personaOwnerLabel(activePersona, users)}</p>
               <div className="role-familiarity">
-                <div><span style={{ width: `${pct}%` }} /></div>
+                <div><span key={activePersona.id} style={{ width: `${pct}%` }} /></div>
                 <em>熟悉度 {pct}%</em>
               </div>
             </div>
