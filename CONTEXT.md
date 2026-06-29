@@ -44,7 +44,7 @@
 
 ---
 
-## 当前代码快照（Codex 最后更新：2026-06-29）
+## 当前代码快照（Codex 最后更新：2026-06-30）
 
 ### 后端文件树
 
@@ -63,13 +63,13 @@ backend/
 │   └── views.py                        # 娱乐 AI 管理视图和系统配置白名单视图。
 ├── api/
 │   ├── __init__.py                     # API 包标记。
-│   └── routes.py                       # REST API 与 SSE 路由集中入口；记忆 API 会补 predicate 元数据并默认隐藏 superseded facts。
+│   └── routes.py                       # REST API 与 SSE 路由集中入口；附件上传支持图片、音频和通用文件。
 ├── chat/
 │   ├── __init__.py                     # chat 包标记。
 │   ├── agents.py                       # 普通角色 LLM/tool-loop 调用；生成层返回消息段数组。
 │   ├── archive_retrieval.py            # 历史消息检索触发、片段召回和检索 gate 日志。
 │   ├── context_assembler.py            # prompt/上下文拼装唯一入口；owner-private facts 注入限 60 条且过滤 superseded。
-│   ├── media.py                        # 消息媒体文本化与图片 data URL 处理。
+│   ├── media.py                        # 消息媒体文本化；图片可转 data URL 供视觉模型读取。
 │   ├── membership.py                   # 频道成员、真人、AI 显示名与活跃成员查询。
 │   ├── memory.py                       # MemoryStore 实现：SQLite 记忆与 Mem0/Chroma 兼容实现。
 │   ├── relationship.py                 # PersonaState 熟悉度、最近语气、互动时间和里程碑更新。
@@ -104,8 +104,8 @@ backend/
 
 ```text
 frontend/src/
-├── App.jsx       # React 主入口与全部页面/面板组件；记忆 tab 从 /api/memory/predicates 读取分组并按 predicate 标签展示 facts。
-└── styles.css    # 全局样式、三栏布局、聊天气泡、右侧面板、记忆分组、成员下拉面板和响应式规则。
+├── App.jsx       # React 主入口与全部页面/面板组件；聊天输入支持表情、图片、通用附件和浏览器录音。
+└── styles.css    # 全局样式、三栏布局、聊天气泡、附件/音频展示、右侧面板、记忆分组和响应式规则。
 ```
 
 ### 数据库表结构
@@ -119,7 +119,7 @@ frontend/src/
 | `users` | `id`, `display_name`, `created_at` | 薄身份真人用户。 |
 | `channels` | `id`, `type`, `title`, `created_at`, `is_system`, `pinned`, `archived`, `ai_enabled`, `created_by_user_id` | 私聊、群聊、管家系统频道。 |
 | `channel_members` | `id`, `channel_id`, `member_type`, `member_id`, `persona_id`, `user_id`, `added_by_user_id`, `active`, `left_at` | 频道真人/AI 成员关系，支持软退出。 |
-| `messages` | `id`, `channel_id`, `sender`, `persona_id`, `author_type`, `author_user_id`, `ai_enabled_snapshot`, `message_type`, `media_url`, `mime_type`, `file_name`, `content`, `created_at`, `status`, `chunk_group` | 聊天消息、附件消息、多段同组追踪和 AI 在场快照。 |
+| `messages` | `id`, `channel_id`, `sender`, `persona_id`, `author_type`, `author_user_id`, `ai_enabled_snapshot`, `message_type`, `media_url`, `mime_type`, `file_name`, `content`, `created_at`, `status`, `chunk_group` | 聊天消息、图片/语音/文件附件、多段同组追踪和 AI 在场快照。 |
 | `interjection_decisions` | `id`, `channel_id`, `created_at`, `considered`, `spoke`, `trigger_reason`, `suppressed_reason`, `latency_ms` | AI presence 插话决策日志。 |
 | `todos` | `id`, `title`, `status`, `due_time`, `priority`, `notes`, `repeat_rule`, `source`, `result`, `source_channel`, `created_at`, `completed_at` | 待办账本。 |
 | `memos` | `id`, `content`, `created_at` | 备忘录账本。 |
@@ -223,6 +223,10 @@ GET      /admin                          # 精确重定向到 /admin/
 - [x] 双真人薄身份：`users` 表与 `X-User-Id`。
 - [x] 群聊 AI 在场/缺席开关与 metrics compare。
 - [x] 图片附件上传与图片消息展示。
+- [x] 聊天输入表情面板：点击表情按钮后插入 emoji 到当前输入框。
+- [x] 通用文件上传：附件按钮可上传非图片文件，消息气泡显示文件名并可下载。
+- [x] 语音消息：浏览器 `MediaRecorder` 录音后按音频附件发送，气泡内可直接播放。
+- [x] 媒体上下文标签：图片、语音、附件分别进入最近对话文本化标签，避免 AI 看到空消息。
 - [ ] `SQLiteToolStore.reorder_todos()` 当前不改变物理顺序，只保留接口兼容。
 - [ ] 主动提醒是保守实现：只按带 `due_time` 的 pending todo 生成固定提醒，不做复杂日程判断。
 - [ ] 工具侧未接 Vikunja / Super Productivity，仍是自建 SQLiteToolStore。
@@ -269,6 +273,19 @@ def create_memory_fact(payload: MemoryFactCreate, x_user_id: str | None = Header
 ```
 
 ```python
+# backend/api/routes.py
+async def upload_attachment(channel_id: int, file: UploadFile = File(...), x_user_id: str | None = Header(default=None, alias="X-User-Id"))
+def post_message(channel_id: int, payload: MessageCreate, x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> list[MessageRead]
+```
+
+```python
+# backend/chat/media.py
+def message_media_label(message: Message) -> str
+def message_text_with_media(message: Message) -> str
+def image_message_to_data_url(message: Message) -> str | None
+```
+
+```python
 # backend/chat/context_assembler.py
 def owner_private_scope_key(owner_user_id: int, persona_id: int) -> str
 def _owner_private_memory_facts(session: Session, profile: ScopeProfile, persona: Persona) -> list[MemoryFact]
@@ -278,8 +295,7 @@ def _owner_private_memory_facts(session: Session, profile: ScopeProfile, persona
 
 - 后端扫描：`Get-ChildItem -Path backend -Recurse -File -Filter *.py`，当前 38 个 `.py` 文件。
 - 前端扫描：`frontend/src/App.jsx`、`frontend/src/styles.css`。
-- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列，复用 `memory_facts`。
-- API 路由扫描：`rg "@router\.(get|post|patch|delete)" backend`，新增 `/api/memory/predicates` 和 `/api/memory/facts`。
-- Instruction 归档：`docs/specs/20260629_predicate_taxonomy_memory_write_instruction.md`。
+- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列，复用 `messages.message_type/media_url/mime_type/file_name`。
+- API 路由扫描：`rg -n "@router\.(get|post|patch|delete)" backend`，附件仍走 `POST /api/channels/{channel_id}/attachments`，消息仍走 `POST /api/channels/{channel_id}/messages`。
 - 必跑检查：`python -m compileall backend scripts` 通过；`python scripts/smoke_two_users.py` 通过；`npm.cmd run build` 通过。
-- 额外探针：TestClient 请求 `/api/memory/predicates` 返回 18 个 predicate；`/api/memory` fact payload 包含 `predicate_label`、`predicate_group`、`superseded`。
+- 本轮功能范围：聊天输入的表情、语音、上传文件；未改数据库迁移，未改已验收 smoke 脚本。

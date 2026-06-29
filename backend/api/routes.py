@@ -85,6 +85,25 @@ def safe_upload_name(filename: str | None) -> str:
     return cleaned or "upload"
 
 
+def upload_suffix(filename: str, content_type: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix:
+        return suffix
+    media_type = content_type.split(";", 1)[0].lower()
+    return {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "audio/webm": ".webm",
+        "audio/ogg": ".ogg",
+        "audio/mpeg": ".mp3",
+        "audio/mp4": ".m4a",
+        "application/pdf": ".pdf",
+        "text/plain": ".txt",
+    }.get(media_type, ".bin")
+
+
 def parse_traits(value: str | None) -> list[str]:
     if not value:
         return []
@@ -723,8 +742,6 @@ async def upload_attachment(
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ):
     content_type = file.content_type or "application/octet-stream"
-    if not content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="only image uploads are supported")
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="empty file")
@@ -736,14 +753,7 @@ async def upload_attachment(
         service.get_channel(channel_id)
         service.ensure_human_member(channel_id, user.id)
     original_name = safe_upload_name(file.filename)
-    suffix = Path(original_name).suffix.lower()
-    if suffix not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
-        suffix = {
-            "image/png": ".png",
-            "image/jpeg": ".jpg",
-            "image/gif": ".gif",
-            "image/webp": ".webp",
-        }.get(content_type, ".img")
+    suffix = upload_suffix(original_name, content_type)
     target_dir = UPLOAD_ROOT / f"channel_{channel_id}"
     target_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}{suffix}"

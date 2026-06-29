@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Circle,
+  FileText,
   Image,
   LogOut,
   Star,
@@ -18,6 +19,7 @@ import {
   Send,
   Settings,
   Smile,
+  Square,
   Trash2,
   UserPlus,
   X,
@@ -25,6 +27,7 @@ import {
 import "./styles.css";
 
 const API = "/api";
+const EMOJI_CHOICES = ["😀", "😂", "😊", "😍", "👍", "👏", "🙏", "💡", "🔥", "🎉", "🤔", "😅", "😭", "❤️", "✅", "👀"];
 
 async function request(path, options = {}) {
   const userId = sessionStorage.getItem("user_id");
@@ -84,6 +87,8 @@ function App() {
   const [input, setInput] = useState("");
   const [mentionedMembers, setMentionedMembers] = useState([]);
   const [mentionPickerOpen, setMentionPickerOpen] = useState(false);
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [recording, setRecording] = useState(false);
   const [selectedUserIds, setSelectedUserIds] = useState([]);
   const [todoDraft, setTodoDraft] = useState({ title: "", dueAt: "", priority: "med" });
   const [sending, setSending] = useState(false);
@@ -92,6 +97,9 @@ function App() {
   const messageEndRef = useRef(null);
   const stewardEndRef = useRef(null);
   const imageInputRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const recorderRef = useRef(null);
+  const recordingChunksRef = useRef([]);
 
   const chatChannels = useMemo(
     () => channels.filter((channel) => channel.type !== "steward" && !channel.is_system),
@@ -133,6 +141,7 @@ function App() {
     if (!activeChannel) return;
     setMentionedMembers([]);
     setMentionPickerOpen(false);
+    setEmojiPickerOpen(false);
     loadMessages(activeChannel.id).catch(showError);
     const source = new EventSource(`${API}/channels/${activeChannel.id}/events`);
     source.addEventListener("typing", () => {
@@ -339,17 +348,18 @@ function App() {
     return response.json();
   }
 
-  async function sendImage(file) {
+  async function sendAttachment(file, forcedType = null) {
     if (!file || !activeChannel || sending) return;
     const caption = input.trim();
     const mentionedIds = mentionedMembers.map((member) => member.channelMemberId);
     const previewUrl = URL.createObjectURL(file);
+    const messageType = forcedType || messageTypeForFile(file);
     const optimistic = {
-      id: `local-image-${Date.now()}`,
+      id: `local-${messageType}-${Date.now()}`,
       senderId: "self",
       senderName: "你",
       fromSelf: true,
-      type: "image",
+      type: messageType,
       text: caption,
       mediaUrl: previewUrl,
       mimeType: file.type,
@@ -371,7 +381,7 @@ function App() {
         body: JSON.stringify({
           content: caption,
           text: caption,
-          type: "image",
+          type: messageType,
           mentions: [],
           mentioned_member_ids: mentionedIds,
           media_url: attachment.media_url,
@@ -387,6 +397,58 @@ function App() {
       URL.revokeObjectURL(previewUrl);
       setSending(false);
       if (imageInputRef.current) imageInputRef.current.value = "";
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function sendImage(file) {
+    await sendAttachment(file, "image");
+  }
+
+  async function sendFile(file) {
+    await sendAttachment(file);
+  }
+
+  function insertEmoji(emoji) {
+    handleComposerChange(`${input}${emoji}`);
+    setEmojiPickerOpen(false);
+  }
+
+  async function toggleRecording() {
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      showError(new Error("当前浏览器不支持录音"));
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      recordingChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data?.size) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onstop = async () => {
+        setRecording(false);
+        stream.getTracks().forEach((track) => track.stop());
+        const mimeType = recorder.mimeType || "audio/webm";
+        const blob = new Blob(recordingChunksRef.current, { type: mimeType });
+        recordingChunksRef.current = [];
+        if (!blob.size) return;
+        const extension = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
+        const file = new File([blob], `voice-${Date.now()}.${extension}`, { type: mimeType });
+        await sendAttachment(file, "audio");
+      };
+      recorder.onerror = () => showError(new Error("录音失败"));
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+      setEmojiPickerOpen(false);
+    } catch (err) {
+      setRecording(false);
+      showError(err);
     }
   }
 
@@ -909,10 +971,18 @@ function App() {
                   sendMessage();
                 }}
               >
-                <IconShell title="附件"><Paperclip size={19} /></IconShell>
-                <IconShell title="图片" onClick={() => imageInputRef.current?.click()}>
+                <IconShell title="附件" onClick={() => fileInputRef.current?.click()} disabled={!activeChannel || sending}>
+                  <Paperclip size={19} />
+                </IconShell>
+                <IconShell title="图片" onClick={() => imageInputRef.current?.click()} disabled={!activeChannel || sending}>
                   <Image size={19} />
                 </IconShell>
+                <input
+                  ref={fileInputRef}
+                  className="hidden-file-input"
+                  type="file"
+                  onChange={(event) => sendFile(event.target.files?.[0])}
+                />
                 <input
                   ref={imageInputRef}
                   className="hidden-file-input"
@@ -926,8 +996,32 @@ function App() {
                   placeholder={activeChannel?.type === "group" ? "发给频道里的真人；AI 默认旁听…" : "说点什么…"}
                   disabled={!activeChannel || sending}
                 />
-                <IconShell title="表情"><Smile size={19} /></IconShell>
-                <IconShell title="语音"><Mic size={19} /></IconShell>
+                <div className="emoji-anchor">
+                  <IconShell
+                    title="表情"
+                    onClick={() => setEmojiPickerOpen((open) => !open)}
+                    disabled={!activeChannel || sending}
+                  >
+                    <Smile size={19} />
+                  </IconShell>
+                  {emojiPickerOpen && (
+                    <div className="emoji-menu">
+                      {EMOJI_CHOICES.map((emoji) => (
+                        <button type="button" key={emoji} onClick={() => insertEmoji(emoji)}>
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <IconShell
+                  title={recording ? "停止录音" : "语音"}
+                  onClick={toggleRecording}
+                  active={recording}
+                  disabled={!activeChannel || sending}
+                >
+                  {recording ? <Square size={17} /> : <Mic size={19} />}
+                </IconShell>
                 <button className="send-button" disabled={!input.trim() || sending}>
                   <Send size={16} />
                   发送
@@ -1220,9 +1314,15 @@ function TagEditor({ traits, onChange }) {
   );
 }
 
-function IconShell({ title, children, onClick }) {
+function IconShell({ title, children, onClick, active = false, disabled = false }) {
   return (
-    <button type="button" className="composer-icon" title={title} onClick={onClick}>
+    <button
+      type="button"
+      className={active ? "composer-icon active" : "composer-icon"}
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+    >
       {children}
     </button>
   );
@@ -1258,8 +1358,20 @@ function BubbleContent({ message }) {
       {message.type === "image" && message.mediaUrl && (
         <img className="bubble-image" src={message.mediaUrl} alt={message.fileName || "上传图片"} />
       )}
+      {message.type === "audio" && message.mediaUrl && (
+        <audio className="bubble-audio" controls src={message.mediaUrl}>
+          <a href={message.mediaUrl}>{message.fileName || "语音消息"}</a>
+        </audio>
+      )}
+      {message.type === "file" && message.mediaUrl && (
+        <a className="bubble-file" href={message.mediaUrl} download={message.fileName || undefined}>
+          <FileText size={18} />
+          <span>{message.fileName || "附件"}</span>
+        </a>
+      )}
       {message.text && <div>{message.text}</div>}
       {message.type === "image" && !message.text && <div className="media-caption">{message.fileName || "图片"}</div>}
+      {message.type === "audio" && !message.text && <div className="media-caption">{message.fileName || "语音"}</div>}
     </>
   );
 }
@@ -2062,6 +2174,12 @@ function normalizeMessage(message) {
     status: message.status === "delivered" ? "已送达" : message.status || "已送达",
     optimistic: message.optimistic,
   };
+}
+
+function messageTypeForFile(file) {
+  if (file.type?.startsWith("image/")) return "image";
+  if (file.type?.startsWith("audio/")) return "audio";
+  return "file";
 }
 
 function normalizeTodo(todo) {

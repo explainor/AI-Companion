@@ -7,10 +7,15 @@ UPLOAD_ROOT = Path(__file__).resolve().parent.parent.parent / "uploads"
 
 
 def message_media_label(message: Message) -> str:
-    if (message.message_type or "text") != "image":
-        return ""
     name = message.file_name or "图片"
-    return f"[图片: {name}]"
+    message_type = message.message_type or "text"
+    if message_type == "image":
+        return f"[图片: {name}]"
+    if message_type == "audio":
+        return f"[语音: {message.file_name or '语音消息'}]"
+    if message_type == "file":
+        return f"[附件: {message.file_name or '文件'}]"
+    return ""
 
 
 def message_text_with_media(message: Message) -> str:
