@@ -272,8 +272,8 @@ p {
   width: 30px;
 }
 
-.icon-button:hover,
-.topbar-actions button:hover,
+.icon-button:hover:not(:disabled),
+.topbar-actions button:hover:not(:disabled),
 .topbar-actions select:hover {
   background: var(--active-bg);
   color: var(--text);
@@ -910,6 +910,12 @@ p {
   font-size: 12px;
   height: 30px;
   padding: 0 13px;
+}
+
+.suggestions button:disabled,
+.topbar-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .suggestions span {
@@ -1874,6 +1880,17 @@ p {
   width: min(460px, 100vw);
 }
 
+.sheet-title-row {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.sheet-title-row h2 {
+  margin: 0;
+}
+
 .sheet label,
 .modal label {
   color: var(--text-2);
@@ -2570,7 +2587,7 @@ p {
     transform 160ms ease;
 }
 
-.suggestions button:hover,
+.suggestions button:hover:not(:disabled),
 .mention-strip button:hover,
 .member-row:hover,
 .member-pick:hover {

@@ -104,8 +104,8 @@ backend/
 
 ```text
 frontend/src/
-├── App.jsx       # React 主入口与全部页面/面板组件；聊天输入支持表情、图片、通用附件和浏览器录音。
-└── styles.css    # 全局样式、三栏布局、聊天气泡、附件/音频展示、右侧面板、记忆分组和响应式规则。
+├── App.jsx       # React 主入口与全部页面/面板组件；聊天输入支持表情、图片、通用附件、浏览器录音和无频道禁用态。
+└── styles.css    # 全局样式、三栏布局、聊天气泡、附件/音频展示、配置弹窗、右侧面板、记忆分组和响应式规则。
 ```
 
 ### 数据库表结构
@@ -227,6 +227,9 @@ GET      /admin                          # 精确重定向到 /admin/
 - [x] 通用文件上传：附件按钮可上传非图片文件，消息气泡显示文件名并可下载。
 - [x] 语音消息：浏览器 `MediaRecorder` 录音后按音频附件发送，气泡内可直接播放。
 - [x] 媒体上下文标签：图片、语音、附件分别进入最近对话文本化标签，避免 AI 看到空消息。
+- [x] 配置弹窗提供明确关闭入口：标题栏 X 与底部“关闭”均可退出。
+- [x] 无频道状态下频道相关按钮禁用：添加成员、AI 在场/缺席、读数、清空、快捷话术和输入工具不会表现为“点了没反应”。
+- [x] 侧栏折叠和账户配置图标补齐 `aria-label/title`，浏览器可访问性树中不再是空按钮。
 - [ ] `SQLiteToolStore.reorder_todos()` 当前不改变物理顺序，只保留接口兼容。
 - [ ] 主动提醒是保守实现：只按带 `due_time` 的 pending todo 生成固定提醒，不做复杂日程判断。
 - [ ] 工具侧未接 Vikunja / Super Productivity，仍是自建 SQLiteToolStore。
@@ -285,6 +288,13 @@ def message_text_with_media(message: Message) -> str
 def image_message_to_data_url(message: Message) -> str | None
 ```
 
+```jsx
+// frontend/src/App.jsx
+function SettingsSheet({ open, onOpenChange, settings, accent, setAccent, goRoles })
+function MemberSheet({ open, onOpenChange, channel, personas, users, currentUser, onAdd, onRemove })
+function IconShell({ title, children, onClick, active = false, disabled = false })
+```
+
 ```python
 # backend/chat/context_assembler.py
 def owner_private_scope_key(owner_user_id: int, persona_id: int) -> str
@@ -295,7 +305,8 @@ def _owner_private_memory_facts(session: Session, profile: ScopeProfile, persona
 
 - 后端扫描：`Get-ChildItem -Path backend -Recurse -File -Filter *.py`，当前 38 个 `.py` 文件。
 - 前端扫描：`frontend/src/App.jsx`、`frontend/src/styles.css`。
-- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列，复用 `messages.message_type/media_url/mime_type/file_name`。
-- API 路由扫描：`rg -n "@router\.(get|post|patch|delete)" backend`，附件仍走 `POST /api/channels/{channel_id}/attachments`，消息仍走 `POST /api/channels/{channel_id}/messages`。
+- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列。
+- API 路由扫描：`rg -n "@router\.(get|post|patch|delete)" backend`，本轮未新增/修改 API。
 - 必跑检查：`python -m compileall backend scripts` 通过；`python scripts/smoke_two_users.py` 通过；`npm.cmd run build` 通过。
-- 本轮功能范围：聊天输入的表情、语音、上传文件；未改数据库迁移，未改已验收 smoke 脚本。
+- 浏览器 QA：本地 `http://127.0.0.1:5173` 复测表情插入、右侧事项/记忆/读数、配置弹窗关闭和无频道禁用态；未触发清空、删除、发送消息、文件上传或麦克风授权。
+- 本轮功能范围：按钮可用性巡检与前端交互修补；未改数据库迁移，未改已验收 smoke 脚本。

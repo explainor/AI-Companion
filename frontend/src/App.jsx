@@ -754,7 +754,12 @@ function App() {
               </div>
             </div>
           )}
-          <button className="icon-button" onClick={() => setCollapsed((value) => !value)}>
+          <button
+            className="icon-button"
+            onClick={() => setCollapsed((value) => !value)}
+            title={collapsed ? "展开侧栏" : "收起侧栏"}
+            aria-label={collapsed ? "展开侧栏" : "收起侧栏"}
+          >
             {collapsed ? <ChevronRight size={17} /> : <ChevronLeft size={17} />}
           </button>
         </div>
@@ -838,7 +843,12 @@ function App() {
               <strong>{currentUser.display_name}</strong>
               <p>User #{currentUser.id}</p>
             </div>
-            <button className="icon-button small" onClick={() => setSheet("settings")}>
+            <button
+              className="icon-button small"
+              onClick={() => setSheet("settings")}
+              title="配置"
+              aria-label="配置"
+            >
               <Settings size={15} />
             </button>
             <button className="icon-button small logout-button" onClick={handleLogout} title="退出登录" aria-label="退出登录">
@@ -879,7 +889,9 @@ function App() {
                 className={sheet === "members" ? "icon-button is-open" : "icon-button"}
                 onClick={() => setSheet(sheet === "members" ? null : "members")}
                 title="添加成员"
+                aria-label="添加成员"
                 aria-expanded={sheet === "members"}
+                disabled={!activeChannel}
               >
                 <UserPlus size={17} />
               </button>
@@ -894,9 +906,11 @@ function App() {
                 onRemove={removeChannelMember}
               />
             </div>
-            <button onClick={toggleAIEnabled}>{activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}</button>
-            <button onClick={loadMetricsCompare}>读数</button>
-            <button onClick={clearChannel}>清空</button>
+            <button onClick={toggleAIEnabled} disabled={!activeChannel}>
+              {activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}
+            </button>
+            <button onClick={loadMetricsCompare} disabled={!activeChannel}>读数</button>
+            <button onClick={clearChannel} disabled={!activeChannel}>清空</button>
             <button onClick={() => setSheet("settings")}>设置</button>
           </div>
         </header>
@@ -927,7 +941,7 @@ function App() {
                   ? ["@角色 收到", "定个时间"]
                   : ["排进事项", "稍后提醒我"]
                 ).map((text) => (
-                  <button key={text} onClick={() => sendMessage(text)}>
+                  <button key={text} onClick={() => sendMessage(text)} disabled={!activeChannel || sending}>
                     {text}
                   </button>
                 ))}
@@ -1761,7 +1775,14 @@ function SettingsSheet({ open, onOpenChange, settings, accent, setAccent, goRole
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Overlay className="sheet-overlay" />
       <Dialog.Content className="sheet">
-        <Dialog.Title>配置</Dialog.Title>
+        <div className="sheet-title-row">
+          <Dialog.Title>配置</Dialog.Title>
+          <Dialog.Close asChild>
+            <button type="button" className="icon-button small" title="关闭配置" aria-label="关闭配置">
+              <X size={15} />
+            </button>
+          </Dialog.Close>
+        </div>
         <label>
           主题色
           <select value={accent} onChange={(event) => setAccent(event.target.value)}>
@@ -1785,6 +1806,11 @@ function SettingsSheet({ open, onOpenChange, settings, accent, setAccent, goRole
             </article>
           </div>
         </section>
+        <div className="modal-actions">
+          <Dialog.Close asChild>
+            <button type="button">关闭</button>
+          </Dialog.Close>
+        </div>
       </Dialog.Content>
     </Dialog.Root>
   );
