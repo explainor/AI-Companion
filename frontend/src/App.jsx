@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Circle,
   Image,
+  LogOut,
   Star,
   Users,
   Mic,
@@ -232,6 +233,22 @@ function App() {
     sessionStorage.setItem("display_name", user.display_name);
     setCurrentUser(user);
     setIdentityDraft("");
+  }
+
+  function handleLogout() {
+    sessionStorage.removeItem("user_id");
+    sessionStorage.removeItem("display_name");
+    setCurrentUser(null);
+    setIdentityDraft("");
+    setMessages([]);
+    setStewardMessages([]);
+    setMentionedMembers([]);
+    setSelectedUserIds([]);
+    setInput("");
+    setStewardInput("");
+    setError("");
+    setSheet(null);
+    setPaneOpen(false);
   }
 
   async function loadMessages(channelId) {
@@ -710,6 +727,9 @@ function App() {
             </div>
             <button className="icon-button small" onClick={() => setSheet("settings")}>
               <Settings size={15} />
+            </button>
+            <button className="icon-button small logout-button" onClick={handleLogout} title="退出登录" aria-label="退出登录">
+              <LogOut size={15} />
             </button>
           </div>
         )}

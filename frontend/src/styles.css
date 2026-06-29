@@ -416,9 +416,26 @@ p {
   padding: 11px 12px;
 }
 
+.account-row > div {
+  flex: 1;
+  min-width: 0;
+}
+
 .account-row strong {
   display: block;
   font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.logout-button {
+  color: var(--text-3);
+}
+
+.logout-button:hover {
+  background: var(--subtle);
+  color: var(--high);
 }
 
 .main-pane {
