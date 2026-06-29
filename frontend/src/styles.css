@@ -1339,6 +1339,95 @@ p {
   text-decoration: line-through;
 }
 
+.memory-admin-head {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+}
+
+.memory-admin-head button,
+.memory-record-actions button {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  height: 28px;
+  padding: 0 10px;
+}
+
+.memory-record-list {
+  display: grid;
+  gap: 9px;
+}
+
+.memory-record {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  display: grid;
+  gap: 9px;
+  padding: 11px 12px;
+}
+
+.memory-record-meta {
+  display: grid;
+  gap: 3px;
+}
+
+.memory-record-meta strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.memory-record-meta span {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.memory-record p {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.memory-record textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+  min-height: 84px;
+  outline: none;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.memory-record-actions {
+  display: flex;
+  gap: 7px;
+  justify-content: flex-end;
+}
+
+.memory-record-actions button:hover:not(:disabled),
+.memory-admin-head button:hover {
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+.memory-record-actions button:last-child:hover:not(:disabled) {
+  color: var(--high);
+}
+
+.memory-record-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .check-button {
   align-items: center;
   background: transparent;

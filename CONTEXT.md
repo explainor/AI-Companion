@@ -168,6 +168,11 @@ PATCH  /api/todos/{todo_id}
 DELETE /api/todos/{todo_id}
 POST   /api/todos/reorder
 GET    /api/memos
+GET    /api/memory
+PATCH  /api/memory/facts/{fact_id}
+DELETE /api/memory/facts/{fact_id}
+PATCH  /api/memory/persona-notes/{note_id}
+DELETE /api/memory/persona-notes/{note_id}
 GET    /api/habits
 GET    /api/habits/{habit_id}/stats
 GET    /api/relations
@@ -206,6 +211,8 @@ GET      /admin                          # 精确重定向到 /admin/
 - [x] 成员面板当前成员列表带移除按钮，前端按创建者/本人/AI owner 判断可用性，后端同步守卫。
 - [x] Claude Design 前端 polish：成员入口打开态、消息/角色/管家轻量动效、右侧 tab 切换动画、debug 面板默认折叠、移动端右侧工作台抽屉和成员底部弹层。
 - [x] 左侧账号行提供退出登录按钮，清除 `sessionStorage` 身份并返回本地薄身份登录界面。
+- [x] 右侧“记忆”tab 提供结构化事实 `memory_facts` 和角色笔记 `persona_notes` 查看、刷新、编辑、删除管理界面。
+- [x] `/api/memory` 按当前 `X-User-Id` 返回 owner-private/relationship/channel 可见事实和可见角色笔记；配套 PATCH/DELETE 管理接口。
 - [x] 角色生成层返回消息段数组；保存时每段独立落库并推送，typing 延迟复用原机制。
 - [x] 群聊多段上限 `presence.max_segments_group=2`，私聊上限 `presence.max_segments_dm=4`。
 - [x] persona 三分类落库：`entertainment` / `owned` / `system`，并记录 `creator_user_id`。
@@ -243,6 +250,8 @@ class SettingsView(ModelView): ...
 # backend/api/routes.py
 def require_persona_editable(session: Session, persona_id: int, x_user_id: str | None) -> tuple[Persona, User]
 def can_remove_channel_member(session: Session, channel: Channel, member_type: str, member_id: int, user: User) -> bool
+def can_access_memory_fact(fact: MemoryFact, user: User, channels: set[int]) -> bool
+def memory_fact_payload(fact: MemoryFact, persona_names: dict[int, str], channel_names: dict[int, str]) -> dict
 ```
 
 ```python
@@ -262,7 +271,7 @@ class ChatService:
 
 - 后端扫描：37 个 `.py` 文件；本次用 `rg --files backend` 扫描。
 - 前端扫描：2 个 `frontend/src` 文件。
-- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列，只做前端退出登录交互。
-- API 路由扫描：发现 45 条 `@router.*` 路由；admin 为 Starlette mount，不在 `@router` 清单内。
+- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列，复用 `memory_facts` 和 `persona_notes`。
+- API 路由扫描：发现 50 条 `@router.*` 路由；admin 为 Starlette mount，不在 `@router` 清单内。
 - 必跑检查：`python -m compileall backend scripts` 通过；`python scripts/smoke_two_users.py` 通过；`npm.cmd run build` 通过。
-- 本轮归档 Instruction：`docs/specs/20260629_frontend_motion_polish_instruction.md`。
+- 额外探针：TestClient 请求 `GET /api/memory` 返回 `facts` / `notes` 列表结构成功；临时插入的 `memory_facts` / `persona_notes` 通过新 PATCH/DELETE 接口编辑并删除成功。

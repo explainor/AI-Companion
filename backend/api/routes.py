@@ -18,6 +18,7 @@ from ..models import (
     Channel,
     ChannelMember,
     Habit,
+    MemoryFact,
     Memo,
     Message,
     Persona,
@@ -26,6 +27,7 @@ from ..models import (
     PersonaState,
     Todo,
     User,
+    now_iso,
 )
 from ..schemas import (
     AIEnabledUpdate,
@@ -33,8 +35,10 @@ from ..schemas import (
     ChannelRead,
     ChannelUpdate,
     MemberAdd,
+    MemoryFactPatch,
     MessageCreate,
     MessageRead,
+    PersonaNotePatch,
     PersonaCreate,
     PersonaModelUpdate,
     PersonaCardUpdate,
@@ -87,6 +91,96 @@ def parse_traits(value: str | None) -> list[str]:
     if not isinstance(parsed, list):
         return []
     return [str(item) for item in parsed if str(item).strip()]
+
+
+def scope_persona_id(scope_key: str) -> int | None:
+    try:
+        return int(scope_key.rsplit(":", 1)[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def scope_channel_id(scope_key: str) -> int | None:
+    if not scope_key.startswith("channel:"):
+        return None
+    try:
+        return int(scope_key.split(":", 1)[1])
+    except (IndexError, ValueError):
+        return None
+
+
+def memory_scope_label(fact: MemoryFact, persona_names: dict[int, str], channel_names: dict[int, str]) -> str:
+    if fact.scope_type == "owner-private":
+        persona_id = scope_persona_id(fact.scope_key)
+        return f"主人私有 · {persona_names.get(persona_id or 0, fact.scope_key)}"
+    if fact.scope_type == "relationship":
+        persona_id = scope_persona_id(fact.scope_key)
+        return f"一对一关系 · {persona_names.get(persona_id or 0, fact.scope_key)}"
+    if fact.scope_type == "channel":
+        channel_id = scope_channel_id(fact.scope_key)
+        return f"频道 · {channel_names.get(channel_id or 0, fact.scope_key)}"
+    return f"{fact.scope_type} · {fact.scope_key}"
+
+
+def visible_persona_ids(session: Session, user: User) -> set[int]:
+    personas = session.exec(select(Persona)).all()
+    return {
+        int(persona.id)
+        for persona in personas
+        if persona.id is not None
+        and (
+            persona.is_system
+            or persona.kind == "entertainment"
+            or number_equals(persona.creator_user_id, user.id)
+        )
+    }
+
+
+def number_equals(left: int | None, right: int | None) -> bool:
+    return left is not None and right is not None and int(left) == int(right)
+
+
+def user_channel_ids(session: Session, user: User) -> set[int]:
+    member_rows = session.exec(
+        select(ChannelMember).where(
+            ChannelMember.member_type == "human",
+            ChannelMember.user_id == user.id,
+            ChannelMember.active == True,  # noqa: E712
+        )
+    ).all()
+    created_rows = session.exec(select(Channel).where(Channel.created_by_user_id == user.id)).all()
+    return {
+        *(int(row.channel_id) for row in member_rows if row.channel_id is not None),
+        *(int(row.id) for row in created_rows if row.id is not None),
+    }
+
+
+def can_access_memory_fact(fact: MemoryFact, user: User, channels: set[int]) -> bool:
+    if fact.scope_type == "owner-private":
+        return fact.scope_key.startswith(f"owner-private:{user.id}:")
+    if fact.scope_type == "relationship":
+        return fact.scope_key.startswith(f"relationship:{user.id}:")
+    if fact.scope_type == "channel":
+        channel_id = scope_channel_id(fact.scope_key)
+        return channel_id in channels
+    return False
+
+
+def memory_fact_payload(fact: MemoryFact, persona_names: dict[int, str], channel_names: dict[int, str]) -> dict:
+    return {
+        "id": fact.id,
+        "scope_type": fact.scope_type,
+        "scope_key": fact.scope_key,
+        "scope_label": memory_scope_label(fact, persona_names, channel_names),
+        "subject_type": fact.subject_type,
+        "subject_id": fact.subject_id,
+        "predicate": fact.predicate,
+        "content": fact.content,
+        "source_message_id": fact.source_message_id,
+        "confidence": fact.confidence,
+        "supersedes_id": fact.supersedes_id,
+        "created_at": fact.created_at,
+    }
 
 
 def role_kind(persona: Persona, card: PersonaCard | None = None) -> str:
@@ -771,6 +865,144 @@ def reorder_todos(payload: TodoReorder):
 def get_memos():
     with Session(engine) as session:
         return SQLiteToolStore(session).list_memos()
+
+
+@router.get("/memory")
+def get_memory_records(x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        channels = user_channel_ids(session, user)
+        personas = session.exec(select(Persona)).all()
+        persona_names = {int(persona.id): persona.name for persona in personas if persona.id is not None}
+        channel_rows = session.exec(select(Channel)).all()
+        channel_names = {
+            int(channel.id): channel.title or f"Channel #{channel.id}"
+            for channel in channel_rows
+            if channel.id is not None
+        }
+        facts = [
+            memory_fact_payload(fact, persona_names, channel_names)
+            for fact in session.exec(
+                select(MemoryFact).order_by(col(MemoryFact.created_at).desc()).limit(240)
+            ).all()
+            if can_access_memory_fact(fact, user, channels)
+        ]
+        visible_ids = visible_persona_ids(session, user)
+        notes = [
+            {
+                "id": note.id,
+                "persona_id": note.persona_id,
+                "persona_name": persona_names.get(note.persona_id, f"Persona #{note.persona_id}"),
+                "content": note.content,
+                "updated_at": note.updated_at,
+            }
+            for note in session.exec(
+                select(PersonaNote).order_by(col(PersonaNote.updated_at).desc()).limit(240)
+            ).all()
+            if note.persona_id in visible_ids
+        ]
+        return {"facts": facts, "notes": notes}
+
+
+@router.patch("/memory/facts/{fact_id}")
+def patch_memory_fact(
+    fact_id: int,
+    payload: MemoryFactPatch,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        fact = session.get(MemoryFact, fact_id)
+        if not fact:
+            raise HTTPException(status_code=404, detail="Memory fact not found")
+        if not can_access_memory_fact(fact, user, user_channel_ids(session, user)):
+            raise HTTPException(status_code=403, detail="Cannot edit this memory fact")
+        if payload.content is not None:
+            content = payload.content.strip()
+            if not content:
+                raise HTTPException(status_code=400, detail="Memory content cannot be empty")
+            fact.content = content
+        if payload.predicate is not None:
+            predicate = payload.predicate.strip()
+            if not predicate:
+                raise HTTPException(status_code=400, detail="Predicate cannot be empty")
+            fact.predicate = predicate
+        if payload.confidence is not None:
+            fact.confidence = min(1.0, max(0.0, float(payload.confidence)))
+        session.add(fact)
+        session.commit()
+        session.refresh(fact)
+        personas = session.exec(select(Persona)).all()
+        persona_names = {int(persona.id): persona.name for persona in personas if persona.id is not None}
+        channels = session.exec(select(Channel)).all()
+        channel_names = {int(channel.id): channel.title or f"Channel #{channel.id}" for channel in channels if channel.id is not None}
+        return memory_fact_payload(fact, persona_names, channel_names)
+
+
+@router.delete("/memory/facts/{fact_id}")
+def delete_memory_fact(
+    fact_id: int,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        fact = session.get(MemoryFact, fact_id)
+        if not fact:
+            raise HTTPException(status_code=404, detail="Memory fact not found")
+        if not can_access_memory_fact(fact, user, user_channel_ids(session, user)):
+            raise HTTPException(status_code=403, detail="Cannot delete this memory fact")
+        session.delete(fact)
+        session.commit()
+        return {"ok": True}
+
+
+@router.patch("/memory/persona-notes/{note_id}")
+def patch_persona_note(
+    note_id: int,
+    payload: PersonaNotePatch,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        note = session.get(PersonaNote, note_id)
+        if not note:
+            raise HTTPException(status_code=404, detail="Persona note not found")
+        if note.persona_id not in visible_persona_ids(session, user):
+            raise HTTPException(status_code=403, detail="Cannot edit this persona note")
+        if payload.content is not None:
+            content = payload.content.strip()
+            if not content:
+                raise HTTPException(status_code=400, detail="Note content cannot be empty")
+            note.content = content
+            note.updated_at = now_iso()
+        session.add(note)
+        session.commit()
+        session.refresh(note)
+        persona = session.get(Persona, note.persona_id)
+        return {
+            "id": note.id,
+            "persona_id": note.persona_id,
+            "persona_name": persona.name if persona else f"Persona #{note.persona_id}",
+            "content": note.content,
+            "updated_at": note.updated_at,
+        }
+
+
+@router.delete("/memory/persona-notes/{note_id}")
+def delete_persona_note(
+    note_id: int,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        note = session.get(PersonaNote, note_id)
+        if not note:
+            raise HTTPException(status_code=404, detail="Persona note not found")
+        if note.persona_id not in visible_persona_ids(session, user):
+            raise HTTPException(status_code=403, detail="Cannot delete this persona note")
+        session.delete(note)
+        session.commit()
+        return {"ok": True}
 
 
 @router.get("/habits")

@@ -62,6 +62,7 @@ function App() {
   const [memos, setMemos] = useState([]);
   const [habits, setHabits] = useState([]);
   const [relations, setRelations] = useState([]);
+  const [memoryRecords, setMemoryRecords] = useState({ facts: [], notes: [] });
   const [personas, setPersonas] = useState([]);
   const [settings, setSettings] = useState({});
   const [nav, setNav] = useState("chat");
@@ -190,13 +191,25 @@ function App() {
   }
 
   async function loadInitial() {
-    const [nextChannels, nextTodos, nextMemos, nextHabits, nextRelations, nextPersonas, nextSettings, brief, nextUsers] =
+    const [
+      nextChannels,
+      nextTodos,
+      nextMemos,
+      nextHabits,
+      nextRelations,
+      nextMemoryRecords,
+      nextPersonas,
+      nextSettings,
+      brief,
+      nextUsers,
+    ] =
       await Promise.all([
         request("/channels"),
         request("/todos"),
         request("/memos"),
         request("/habits"),
         request("/relations").catch(() => request("/persona-state")),
+        request("/memory").catch(() => ({ facts: [], notes: [] })),
         request("/personas?include_system=true"),
         request("/settings").then(normalizeSettings),
         request("/steward/brief").catch(() => null),
@@ -212,6 +225,7 @@ function App() {
     setMemos(nextMemos.map(normalizeMemo));
     setHabits(nextHabits.map(normalizeHabit));
     setRelations(nextRelations.map(normalizeRelation));
+    setMemoryRecords(normalizeMemoryRecords(nextMemoryRecords));
     const normalizedPersonas = nextPersonas.map(normalizePersona);
     setPersonas(normalizedPersonas);
     setActivePersonaId((current) => current || normalizedPersonas[0]?.id || null);
@@ -405,11 +419,12 @@ function App() {
   }
 
   async function refreshLedger() {
-    const [nextTodos, nextMemos, nextHabits, nextRelations, nextPersonas, brief] = await Promise.all([
+    const [nextTodos, nextMemos, nextHabits, nextRelations, nextMemoryRecords, nextPersonas, brief] = await Promise.all([
       request("/todos"),
       request("/memos"),
       request("/habits"),
       request("/relations").catch(() => request("/persona-state")),
+      request("/memory").catch(() => ({ facts: [], notes: [] })),
       request("/personas?include_system=true"),
       request("/steward/brief").catch(() => null),
     ]);
@@ -417,8 +432,40 @@ function App() {
     setMemos(nextMemos.map(normalizeMemo));
     setHabits(nextHabits.map(normalizeHabit));
     setRelations(nextRelations.map(normalizeRelation));
+    setMemoryRecords(normalizeMemoryRecords(nextMemoryRecords));
     setPersonas(nextPersonas.map(normalizePersona));
     setStewardBrief(brief);
+  }
+
+  async function refreshMemoryRecords() {
+    const records = await request("/memory");
+    setMemoryRecords(normalizeMemoryRecords(records));
+  }
+
+  async function updateMemoryFact(factId, fields) {
+    await request(`/memory/facts/${factId}`, {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    });
+    await refreshMemoryRecords();
+  }
+
+  async function deleteMemoryFact(factId) {
+    await request(`/memory/facts/${factId}`, { method: "DELETE" });
+    await refreshMemoryRecords();
+  }
+
+  async function updatePersonaNote(noteId, fields) {
+    await request(`/memory/persona-notes/${noteId}`, {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    });
+    await refreshMemoryRecords();
+  }
+
+  async function deletePersonaNote(noteId) {
+    await request(`/memory/persona-notes/${noteId}`, { method: "DELETE" });
+    await refreshMemoryRecords();
   }
 
   async function createTodo(event) {
@@ -939,7 +986,19 @@ function App() {
                     onDelete={deleteTodo}
                   />
                 )}
-                {tab === "memory" && <MemoryPanel memos={memos} habits={habits} relations={relations} />}
+                {tab === "memory" && (
+                  <MemoryPanel
+                    memos={memos}
+                    habits={habits}
+                    relations={relations}
+                    records={memoryRecords}
+                    onRefresh={refreshMemoryRecords}
+                    onUpdateFact={updateMemoryFact}
+                    onDeleteFact={deleteMemoryFact}
+                    onUpdateNote={updatePersonaNote}
+                    onDeleteNote={deletePersonaNote}
+                  />
+                )}
               </div>
             </div>
             {stewardChannel && (
@@ -1308,7 +1367,60 @@ function TasksPanel({ todos, draft, setDraft, onCreate, onToggle, onDelete }) {
   );
 }
 
-function MemoryPanel({ memos, habits, relations }) {
+function MemoryPanel({
+  memos,
+  habits,
+  relations,
+  records,
+  onRefresh,
+  onUpdateFact,
+  onDeleteFact,
+  onUpdateNote,
+  onDeleteNote,
+}) {
+  const [editing, setEditing] = useState(null);
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const facts = records?.facts || [];
+  const notes = records?.notes || [];
+
+  function startEdit(kind, item) {
+    setEditing(`${kind}:${item.id}`);
+    setDraft(item.content || "");
+  }
+
+  async function saveEdit(kind, id) {
+    const content = draft.trim();
+    if (!content) return;
+    setSaving(true);
+    try {
+      if (kind === "fact") {
+        await onUpdateFact(id, { content });
+      } else {
+        await onUpdateNote(id, { content });
+      }
+      setEditing(null);
+      setDraft("");
+    } catch (err) {
+      window.alert(err.message || String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteItem(kind, id) {
+    if (!window.confirm("确认删除这条记忆？")) return;
+    try {
+      if (kind === "fact") {
+        await onDeleteFact(id);
+      } else {
+        await onDeleteNote(id);
+      }
+    } catch (err) {
+      window.alert(err.message || String(err));
+    }
+  }
+
   return (
     <>
       <section className="side-section">
@@ -1348,6 +1460,87 @@ function MemoryPanel({ memos, habits, relations }) {
           </article>
         ))}
         {!relations.length && <Empty text="暂无关系状态" />}
+      </section>
+      <section className="side-section memory-admin">
+        <div className="memory-admin-head">
+          <h4>结构化事实</h4>
+          <button type="button" onClick={onRefresh}>刷新</button>
+        </div>
+        <div className="memory-record-list">
+          {facts.map((fact) => {
+            const key = `fact:${fact.id}`;
+            const active = editing === key;
+            return (
+              <article className="memory-record" key={key}>
+                <div className="memory-record-meta">
+                  <strong>{fact.scopeLabel}</strong>
+                  <span>{fact.predicate} · 置信 {Math.round((fact.confidence || 0) * 100)}%</span>
+                </div>
+                {active ? (
+                  <textarea value={draft} onChange={(event) => setDraft(event.target.value)} />
+                ) : (
+                  <p>{fact.content}</p>
+                )}
+                <div className="memory-record-actions">
+                  {active ? (
+                    <>
+                      <button type="button" onClick={() => saveEdit("fact", fact.id)} disabled={saving || !draft.trim()}>
+                        保存
+                      </button>
+                      <button type="button" onClick={() => setEditing(null)} disabled={saving}>取消</button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => startEdit("fact", fact)}>编辑</button>
+                      <button type="button" onClick={() => deleteItem("fact", fact.id)}>删除</button>
+                    </>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {!facts.length && <Empty text="暂无结构化事实" />}
+        </div>
+      </section>
+      <section className="side-section memory-admin">
+        <div className="memory-admin-head">
+          <h4>角色笔记</h4>
+        </div>
+        <div className="memory-record-list">
+          {notes.map((note) => {
+            const key = `note:${note.id}`;
+            const active = editing === key;
+            return (
+              <article className="memory-record" key={key}>
+                <div className="memory-record-meta">
+                  <strong>{note.personaName}</strong>
+                  <span>{formatShortTime(note.updatedAt)}</span>
+                </div>
+                {active ? (
+                  <textarea value={draft} onChange={(event) => setDraft(event.target.value)} />
+                ) : (
+                  <p>{note.content}</p>
+                )}
+                <div className="memory-record-actions">
+                  {active ? (
+                    <>
+                      <button type="button" onClick={() => saveEdit("note", note.id)} disabled={saving || !draft.trim()}>
+                        保存
+                      </button>
+                      <button type="button" onClick={() => setEditing(null)} disabled={saving}>取消</button>
+                    </>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => startEdit("note", note)}>编辑</button>
+                      <button type="button" onClick={() => deleteItem("note", note.id)}>删除</button>
+                    </>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+          {!notes.length && <Empty text="暂无角色笔记" />}
+        </div>
       </section>
     </>
   );
@@ -1889,6 +2082,32 @@ function normalizeRelation(relation) {
     role: relation.role || "伙伴",
     avatarHue: relation.avatarHue ?? hueFor(relation.name || String(relation.persona_id)),
     familiarity: relation.familiarity || 0,
+  };
+}
+
+function normalizeMemoryRecords(records) {
+  return {
+    facts: (records?.facts || []).map((fact) => ({
+      id: fact.id,
+      scopeType: fact.scope_type || fact.scopeType || "",
+      scopeKey: fact.scope_key || fact.scopeKey || "",
+      scopeLabel: fact.scope_label || fact.scopeLabel || fact.scope_key || "",
+      subjectType: fact.subject_type || fact.subjectType || "",
+      subjectId: fact.subject_id ?? fact.subjectId ?? null,
+      predicate: fact.predicate || "fact",
+      content: fact.content || "",
+      sourceMessageId: fact.source_message_id ?? fact.sourceMessageId ?? null,
+      confidence: Number(fact.confidence ?? 1),
+      supersedesId: fact.supersedes_id ?? fact.supersedesId ?? null,
+      createdAt: fact.created_at || fact.createdAt || "",
+    })),
+    notes: (records?.notes || []).map((note) => ({
+      id: note.id,
+      personaId: note.persona_id ?? note.personaId,
+      personaName: note.persona_name || note.personaName || `Persona #${note.persona_id || note.personaId}`,
+      content: note.content || "",
+      updatedAt: note.updated_at || note.updatedAt || "",
+    })),
   };
 }
 

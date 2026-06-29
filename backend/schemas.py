@@ -146,3 +146,13 @@ class UserRead(BaseModel):
 
 class AIEnabledUpdate(BaseModel):
     enabled: bool
+
+
+class MemoryFactPatch(BaseModel):
+    content: Optional[str] = None
+    predicate: Optional[str] = None
+    confidence: Optional[float] = None
+
+
+class PersonaNotePatch(BaseModel):
+    content: Optional[str] = None
