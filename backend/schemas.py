@@ -154,5 +154,11 @@ class MemoryFactPatch(BaseModel):
     confidence: Optional[float] = None
 
 
+class MemoryFactCreate(BaseModel):
+    predicate: str
+    content: str
+    confidence: Optional[float] = None
+
+
 class PersonaNotePatch(BaseModel):
     content: Optional[str] = None

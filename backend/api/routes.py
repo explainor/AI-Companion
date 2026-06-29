@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlmodel import Session, col, select
 
 from ..chat.memory import build_memory_store
+from ..chat.context_assembler import owner_private_scope_key
 from ..chat.membership import add_member, list_active_members, member_display_name, remove_member
 from ..chat.service import ChatService
 from ..core.config import get_setting, list_settings, set_setting
@@ -35,6 +36,7 @@ from ..schemas import (
     ChannelRead,
     ChannelUpdate,
     MemberAdd,
+    MemoryFactCreate,
     MemoryFactPatch,
     MessageCreate,
     MessageRead,
@@ -51,6 +53,8 @@ from ..schemas import (
     UserRead,
 )
 from ..steward.service import StewardService
+from ..steward.service import resolve_supersedes
+from ..steward.predicates import GROUP_ORDER, MEMORY_PREDICATES
 from ..metrics.service import compare as compare_metrics
 from ..metrics.service import session_metrics
 from ..tools.sqlite_store import SQLiteToolStore
@@ -167,6 +171,7 @@ def can_access_memory_fact(fact: MemoryFact, user: User, channels: set[int]) -> 
 
 
 def memory_fact_payload(fact: MemoryFact, persona_names: dict[int, str], channel_names: dict[int, str]) -> dict:
+    metadata = MEMORY_PREDICATES.get(fact.predicate, {})
     return {
         "id": fact.id,
         "scope_type": fact.scope_type,
@@ -175,10 +180,13 @@ def memory_fact_payload(fact: MemoryFact, persona_names: dict[int, str], channel
         "subject_type": fact.subject_type,
         "subject_id": fact.subject_id,
         "predicate": fact.predicate,
+        "predicate_label": metadata.get("label", fact.predicate),
+        "predicate_group": metadata.get("group", "其他"),
         "content": fact.content,
         "source_message_id": fact.source_message_id,
         "confidence": fact.confidence,
         "supersedes_id": fact.supersedes_id,
+        "superseded": fact.supersedes_id is not None,
         "created_at": fact.created_at,
     }
 
@@ -868,7 +876,10 @@ def get_memos():
 
 
 @router.get("/memory")
-def get_memory_records(x_user_id: str | None = Header(default=None, alias="X-User-Id")):
+def get_memory_records(
+    include_superseded: bool = Query(default=False),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
     with Session(engine) as session:
         user = get_current_user(session, x_user_id)
         channels = user_channel_ids(session, user)
@@ -880,11 +891,17 @@ def get_memory_records(x_user_id: str | None = Header(default=None, alias="X-Use
             for channel in channel_rows
             if channel.id is not None
         }
+        statement = select(MemoryFact).order_by(col(MemoryFact.created_at).desc()).limit(240)
+        if not include_superseded:
+            statement = (
+                select(MemoryFact)
+                .where(MemoryFact.supersedes_id == None)  # noqa: E711
+                .order_by(col(MemoryFact.created_at).desc())
+                .limit(240)
+            )
         facts = [
             memory_fact_payload(fact, persona_names, channel_names)
-            for fact in session.exec(
-                select(MemoryFact).order_by(col(MemoryFact.created_at).desc()).limit(240)
-            ).all()
+            for fact in session.exec(statement).all()
             if can_access_memory_fact(fact, user, channels)
         ]
         visible_ids = visible_persona_ids(session, user)
@@ -902,6 +919,62 @@ def get_memory_records(x_user_id: str | None = Header(default=None, alias="X-Use
             if note.persona_id in visible_ids
         ]
         return {"facts": facts, "notes": notes}
+
+
+@router.get("/memory/predicates")
+def get_memory_predicates():
+    return {"predicates": MEMORY_PREDICATES, "group_order": GROUP_ORDER}
+
+
+@router.post("/memory/facts")
+def create_memory_fact(
+    payload: MemoryFactCreate,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+):
+    predicate = payload.predicate.strip()
+    content = payload.content.strip()
+    if predicate not in MEMORY_PREDICATES:
+        raise HTTPException(status_code=400, detail="Predicate is not in the controlled vocabulary")
+    if not content:
+        raise HTTPException(status_code=400, detail="Memory content cannot be empty")
+    try:
+        confidence = float(payload.confidence) if payload.confidence is not None else 1.0
+    except (TypeError, ValueError):
+        confidence = 1.0
+    confidence = min(1.0, max(0.0, confidence))
+    with Session(engine) as session:
+        user = get_current_user(session, x_user_id)
+        steward = ensure_user_steward(session, user)
+        if not steward or steward.id is None:
+            raise HTTPException(status_code=404, detail="Steward persona not found")
+        source_message = session.exec(
+            select(Message)
+            .where(Message.author_type == "human", Message.author_user_id == user.id)
+            .order_by(col(Message.created_at).desc())
+        ).first()
+        if not source_message or source_message.id is None:
+            raise HTTPException(status_code=400, detail="Create at least one message before adding memory facts")
+        fact = MemoryFact(
+            scope_type="owner-private",
+            scope_key=owner_private_scope_key(user.id, steward.id),
+            subject_type="user",
+            subject_id=user.id,
+            predicate=predicate,
+            content=content,
+            source_message_id=source_message.id,
+            confidence=confidence,
+        )
+        session.add(fact)
+        session.commit()
+        session.refresh(fact)
+        if fact.id is not None:
+            resolve_supersedes(session, fact.scope_type, fact.scope_key, predicate, fact.id)
+            session.refresh(fact)
+        personas = session.exec(select(Persona)).all()
+        persona_names = {int(persona.id): persona.name for persona in personas if persona.id is not None}
+        channels = session.exec(select(Channel)).all()
+        channel_names = {int(channel.id): channel.title or f"Channel #{channel.id}" for channel in channels if channel.id is not None}
+        return memory_fact_payload(fact, persona_names, channel_names)
 
 
 @router.patch("/memory/facts/{fact_id}")
@@ -924,8 +997,8 @@ def patch_memory_fact(
             fact.content = content
         if payload.predicate is not None:
             predicate = payload.predicate.strip()
-            if not predicate:
-                raise HTTPException(status_code=400, detail="Predicate cannot be empty")
+            if predicate not in MEMORY_PREDICATES:
+                raise HTTPException(status_code=400, detail="Predicate is not in the controlled vocabulary")
             fact.predicate = predicate
         if payload.confidence is not None:
             fact.confidence = min(1.0, max(0.0, float(payload.confidence)))

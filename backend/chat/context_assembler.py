@@ -207,7 +207,8 @@ def _owner_style_profile(session: Session, profile: ScopeProfile, persona: Perso
         .where(
             MemoryFact.scope_type == "owner-private",
             MemoryFact.scope_key == owner_private_scope_key(profile.owner_user_id, persona.id or 0),
-            MemoryFact.predicate == "style",
+            MemoryFact.predicate == "pref.response_style",
+            MemoryFact.supersedes_id == None,  # noqa: E711
         )
         .order_by(col(MemoryFact.created_at).desc())
     ).first()
@@ -281,10 +282,12 @@ def _owner_private_memory_facts(session: Session, profile: ScopeProfile, persona
             MemoryFact.scope_type == "owner-private",
             MemoryFact.scope_key == owner_private_scope_key(profile.owner_user_id, persona.id or 0),
             MemoryFact.predicate != "style",
+            MemoryFact.predicate != "pref.response_style",
             MemoryFact.predicate != "disclosure_rule",
+            MemoryFact.supersedes_id == None,  # noqa: E711
         )
         .order_by(col(MemoryFact.created_at).desc())
-        .limit(8)
+        .limit(60)
     ).all()
 
 

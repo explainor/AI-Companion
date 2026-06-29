@@ -63,6 +63,7 @@ function App() {
   const [habits, setHabits] = useState([]);
   const [relations, setRelations] = useState([]);
   const [memoryRecords, setMemoryRecords] = useState({ facts: [], notes: [] });
+  const [memoryPredicates, setMemoryPredicates] = useState({ predicates: {}, groupOrder: [] });
   const [personas, setPersonas] = useState([]);
   const [settings, setSettings] = useState({});
   const [nav, setNav] = useState("chat");
@@ -198,6 +199,7 @@ function App() {
       nextHabits,
       nextRelations,
       nextMemoryRecords,
+      nextMemoryPredicates,
       nextPersonas,
       nextSettings,
       brief,
@@ -210,6 +212,7 @@ function App() {
         request("/habits"),
         request("/relations").catch(() => request("/persona-state")),
         request("/memory").catch(() => ({ facts: [], notes: [] })),
+        request("/memory/predicates").catch(() => ({ predicates: {}, group_order: [] })),
         request("/personas?include_system=true"),
         request("/settings").then(normalizeSettings),
         request("/steward/brief").catch(() => null),
@@ -226,6 +229,7 @@ function App() {
     setHabits(nextHabits.map(normalizeHabit));
     setRelations(nextRelations.map(normalizeRelation));
     setMemoryRecords(normalizeMemoryRecords(nextMemoryRecords));
+    setMemoryPredicates(normalizeMemoryPredicates(nextMemoryPredicates));
     const normalizedPersonas = nextPersonas.map(normalizePersona);
     setPersonas(normalizedPersonas);
     setActivePersonaId((current) => current || normalizedPersonas[0]?.id || null);
@@ -992,6 +996,7 @@ function App() {
                     habits={habits}
                     relations={relations}
                     records={memoryRecords}
+                    predicateMeta={memoryPredicates}
                     onRefresh={refreshMemoryRecords}
                     onUpdateFact={updateMemoryFact}
                     onDeleteFact={deleteMemoryFact}
@@ -1372,6 +1377,7 @@ function MemoryPanel({
   habits,
   relations,
   records,
+  predicateMeta,
   onRefresh,
   onUpdateFact,
   onDeleteFact,
@@ -1383,6 +1389,9 @@ function MemoryPanel({
   const [saving, setSaving] = useState(false);
   const facts = records?.facts || [];
   const notes = records?.notes || [];
+  const groupOrder = predicateMeta?.groupOrder || [];
+  const predicates = predicateMeta?.predicates || {};
+  const groupedFacts = groupMemoryFacts(facts, groupOrder, predicates);
 
   function startEdit(kind, item) {
     setEditing(`${kind}:${item.id}`);
@@ -1466,41 +1475,49 @@ function MemoryPanel({
           <h4>结构化事实</h4>
           <button type="button" onClick={onRefresh}>刷新</button>
         </div>
-        <div className="memory-record-list">
-          {facts.map((fact) => {
-            const key = `fact:${fact.id}`;
-            const active = editing === key;
-            return (
-              <article className="memory-record" key={key}>
-                <div className="memory-record-meta">
-                  <strong>{fact.scopeLabel}</strong>
-                  <span>{fact.predicate} · 置信 {Math.round((fact.confidence || 0) * 100)}%</span>
-                </div>
-                {active ? (
-                  <textarea value={draft} onChange={(event) => setDraft(event.target.value)} />
-                ) : (
-                  <p>{fact.content}</p>
-                )}
-                <div className="memory-record-actions">
-                  {active ? (
-                    <>
-                      <button type="button" onClick={() => saveEdit("fact", fact.id)} disabled={saving || !draft.trim()}>
-                        保存
-                      </button>
-                      <button type="button" onClick={() => setEditing(null)} disabled={saving}>取消</button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" onClick={() => startEdit("fact", fact)}>编辑</button>
-                      <button type="button" onClick={() => deleteItem("fact", fact.id)}>删除</button>
-                    </>
-                  )}
-                </div>
-              </article>
-            );
-          })}
-          {!facts.length && <Empty text="暂无结构化事实" />}
-        </div>
+        {groupedFacts.map((group) => (
+          <details className="memory-group" key={group.name} open>
+            <summary>
+              <span>{group.name}</span>
+              <button type="button" disabled title="后续支持手动添加">+</button>
+            </summary>
+            <div className="memory-record-list">
+              {group.items.map((fact) => {
+                const key = `fact:${fact.id}`;
+                const active = editing === key;
+                return (
+                  <article className="memory-record" key={key}>
+                    <div className="memory-record-meta">
+                      <strong>{fact.predicateLabel}</strong>
+                      <span>置信度 {formatConfidence(fact.confidence)} · {formatShortTime(fact.createdAt)}</span>
+                    </div>
+                    {active ? (
+                      <textarea value={draft} onChange={(event) => setDraft(event.target.value)} />
+                    ) : (
+                      <p>{fact.content}</p>
+                    )}
+                    <div className="memory-record-actions">
+                      {active ? (
+                        <>
+                          <button type="button" onClick={() => saveEdit("fact", fact.id)} disabled={saving || !draft.trim()}>
+                            保存
+                          </button>
+                          <button type="button" onClick={() => setEditing(null)} disabled={saving}>取消</button>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => startEdit("fact", fact)}>编辑</button>
+                          <button type="button" onClick={() => deleteItem("fact", fact.id)}>删除</button>
+                        </>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
+              {!group.items.length && <p className="memory-empty">管家会在对话中自动提炼，也可以手动添加</p>}
+            </div>
+          </details>
+        ))}
       </section>
       <section className="side-section memory-admin">
         <div className="memory-admin-head">
@@ -2095,10 +2112,13 @@ function normalizeMemoryRecords(records) {
       subjectType: fact.subject_type || fact.subjectType || "",
       subjectId: fact.subject_id ?? fact.subjectId ?? null,
       predicate: fact.predicate || "fact",
+      predicateLabel: fact.predicate_label || fact.predicateLabel || fact.predicate || "事实",
+      predicateGroup: fact.predicate_group || fact.predicateGroup || "其他",
       content: fact.content || "",
       sourceMessageId: fact.source_message_id ?? fact.sourceMessageId ?? null,
       confidence: Number(fact.confidence ?? 1),
       supersedesId: fact.supersedes_id ?? fact.supersedesId ?? null,
+      superseded: Boolean(fact.superseded ?? fact.superseded),
       createdAt: fact.created_at || fact.createdAt || "",
     })),
     notes: (records?.notes || []).map((note) => ({
@@ -2109,6 +2129,36 @@ function normalizeMemoryRecords(records) {
       updatedAt: note.updated_at || note.updatedAt || "",
     })),
   };
+}
+
+function normalizeMemoryPredicates(data) {
+  return {
+    predicates: data?.predicates || {},
+    groupOrder: data?.group_order || data?.groupOrder || [],
+  };
+}
+
+function groupMemoryFacts(facts, groupOrder, predicates) {
+  const groups = new Map();
+  const orderedGroups = groupOrder.length ? groupOrder : ["其他"];
+  orderedGroups.forEach((name) => groups.set(name, []));
+  facts.forEach((fact) => {
+    const metadata = predicates[fact.predicate] || {};
+    const group = fact.predicateGroup || metadata.group || "其他";
+    if (!groups.has(group)) {
+      groups.set(group, []);
+    }
+    groups.get(group).push({
+      ...fact,
+      predicateLabel: fact.predicateLabel || metadata.label || fact.predicate,
+    });
+  });
+  return Array.from(groups.entries()).map(([name, items]) => ({ name, items }));
+}
+
+function formatConfidence(value) {
+  const numeric = Number.isFinite(Number(value)) ? Number(value) : 0;
+  return numeric.toFixed(1);
 }
 
 function normalizePersona(persona) {

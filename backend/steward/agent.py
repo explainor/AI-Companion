@@ -7,6 +7,7 @@ from ..core.config import resolve_model
 from ..core.llm import provider_ready, run_tool_loop
 from ..core.time_context import build_time_context
 from ..models import Message, Persona, Todo
+from .predicates import PREDICATE_PROMPT_BLOCK
 
 STEWARD_TOOLS = [
     {
@@ -58,12 +59,16 @@ STEWARD_TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "write_memo",
-            "description": "Write an objective long-term memo in first-person steward voice.",
+            "name": "write_memory_fact",
+            "description": "Write one owner-private long-term memory fact using only the controlled predicate vocabulary.",
             "parameters": {
                 "type": "object",
-                "properties": {"content": {"type": "string"}},
-                "required": ["content"],
+                "properties": {
+                    "predicate": {"type": "string"},
+                    "content": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["predicate", "content", "confidence"],
             },
         },
     },
@@ -160,6 +165,18 @@ def run_steward_agent(
 - 用户纠正“别说那个 / 不要透露 / 这个别在群里说”等披露边界时，调用 add_disclosure_rule，写成 allow/deny topic=...。
 - 这是结构化记忆读写，不是模型训练或微调。
 
+长期记忆写入边界:
+- 有明确时间/截止日期的行动项 -> 调用 Todo 工具，不写 memory_facts。
+- 可以打卡的习惯（每天/每周做某事）-> 调用 Habit 工具，不写 memory_facts。
+- 关于用户本人的软性事实 -> 调用 write_memory_fact，并且 predicate 必须来自下方词表。
+
+memory_facts 受控词表:
+{PREDICATE_PROMPT_BLOCK}
+
+如果没有匹配的 predicate，不写入。宁可漏掉，不要自造 predicate。
+每次最多调用 write_memory_fact 3 次，优先选置信度最高的。
+overwrite 类由系统在落库时自动 supersede 旧值；state / accumulate 类直接新增。
+
 当前未完成待办:
 {format_todos(open_todos)}
 
@@ -204,12 +221,6 @@ def fallback_steward(open_todos: list[Todo], user_content: str) -> list[dict[str
                     "input": {"todo_id": gym.id, "result": "跑了 PB"},
                 }
             )
-        calls.append(
-            {
-                "name": "write_memo",
-                "input": {"content": "我记录到用户今日完成健身，并跑出个人最佳。"},
-            }
-        )
         return calls
 
     if "两点" in user_content:

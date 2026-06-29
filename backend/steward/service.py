@@ -1,12 +1,41 @@
 from typing import Any
 
-from sqlmodel import Session, col, select
+from sqlmodel import Session, select
 
 from ..core.transport import transport
 from ..models import Channel, MemoryFact, Message, Persona, PersonaCard
 from ..chat.context_assembler import owner_private_scope_key
 from ..tools.sqlite_store import SQLiteToolStore
 from .agent import run_steward_agent
+from .predicates import MEMORY_PREDICATES
+
+
+def resolve_supersedes(
+    session: Session,
+    scope_type: str,
+    scope_key: str,
+    predicate: str,
+    new_fact_id: int,
+) -> None:
+    """
+    对 overwrite 类 predicate：将同 scope + 同 predicate 的旧事实
+    supersedes_id 设为 new_fact_id，标记为已过期。
+    """
+    if MEMORY_PREDICATES.get(predicate, {}).get("update_behavior") != "overwrite":
+        return
+    old_facts = session.exec(
+        select(MemoryFact).where(
+            MemoryFact.scope_type == scope_type,
+            MemoryFact.scope_key == scope_key,
+            MemoryFact.predicate == predicate,
+            MemoryFact.supersedes_id == None,  # noqa: E711
+            MemoryFact.id != new_fact_id,
+        )
+    ).all()
+    for fact in old_facts:
+        fact.supersedes_id = new_fact_id
+        session.add(fact)
+    session.commit()
 
 
 class StewardService:
@@ -45,6 +74,7 @@ class StewardService:
         recent = recent or []
         source_message = next((message for message in reversed(recent) if message.author_type == "human"), None)
         owner_user_id = self._owner_user_id(steward, source_message)
+        memory_fact_count = 0
         for call in calls:
             name = call["name"]
             data = call.get("input", {})
@@ -61,24 +91,42 @@ class StewardService:
                 )
             elif name == "complete_todo":
                 self.tool_store.complete_todo(data.get("todo_id"), data.get("result"))
-            elif name == "write_memo" and data.get("content"):
-                self.tool_store.write_memo(data["content"])
-                self._write_owner_fact(steward, owner_user_id, "memo", data["content"], source_message)
-            elif name == "upsert_habit" and data.get("name") and data.get("schedule"):
-                self.tool_store.upsert_habit(data["name"], data["schedule"])
-                self._write_owner_fact(
+            elif name == "write_memory_fact" and data.get("predicate") and data.get("content"):
+                if memory_fact_count >= 3:
+                    continue
+                if self._write_owner_fact(
                     steward,
                     owner_user_id,
-                    "habit",
-                    f"{data['name']}；schedule={data['schedule']}",
+                    data["predicate"],
+                    data["content"],
                     source_message,
-                )
+                    confidence=data.get("confidence"),
+                ):
+                    memory_fact_count += 1
+            elif name == "write_memo" and data.get("content"):
+                self.tool_store.write_memo(data["content"])
+            elif name == "upsert_habit" and data.get("name") and data.get("schedule"):
+                self.tool_store.upsert_habit(data["name"], data["schedule"])
             elif name == "log_habit" and data.get("habit_id"):
                 self.tool_store.log_habit(data["habit_id"], data.get("value"))
             elif name == "update_style_profile" and data.get("fields"):
-                self._write_owner_fact(steward, owner_user_id, "style", data["fields"], source_message, supersede=True)
+                if memory_fact_count < 3 and self._write_owner_fact(
+                    steward,
+                    owner_user_id,
+                    "pref.response_style",
+                    data["fields"],
+                    source_message,
+                ):
+                    memory_fact_count += 1
             elif name == "add_disclosure_rule" and data.get("rule"):
-                self._write_owner_fact(steward, owner_user_id, "disclosure_rule", data["rule"], source_message)
+                if memory_fact_count < 3 and self._write_owner_fact(
+                    steward,
+                    owner_user_id,
+                    "pref.topic_avoid",
+                    data["rule"],
+                    source_message,
+                ):
+                    memory_fact_count += 1
 
     def run_dock_message(
         self,
@@ -197,32 +245,33 @@ class StewardService:
         predicate: str,
         content: str,
         source_message: Message | None,
-        supersede: bool = False,
-    ) -> None:
+        confidence: Any = None,
+    ) -> bool:
         if not steward or not steward.id or not owner_user_id or not source_message or not source_message.id:
-            return
-        supersedes_id = None
+            return False
+        predicate = predicate.strip()
+        content = content.strip()
+        if predicate not in MEMORY_PREDICATES or not content:
+            return False
         scope_key = owner_private_scope_key(owner_user_id, steward.id)
-        if supersede:
-            previous = self.session.exec(
-                select(MemoryFact)
-                .where(
-                    MemoryFact.scope_type == "owner-private",
-                    MemoryFact.scope_key == scope_key,
-                    MemoryFact.predicate == predicate,
-                )
-                .order_by(col(MemoryFact.created_at).desc())
-            ).first()
-            supersedes_id = previous.id if previous else None
+        try:
+            confidence_value = float(confidence) if confidence is not None else 1.0
+        except (TypeError, ValueError):
+            confidence_value = 1.0
+        confidence_value = min(1.0, max(0.0, confidence_value))
         fact = MemoryFact(
             scope_type="owner-private",
             scope_key=scope_key,
             subject_type="user",
             subject_id=owner_user_id,
             predicate=predicate,
-            content=content.strip(),
+            content=content[:50],
             source_message_id=source_message.id,
-            supersedes_id=supersedes_id,
+            confidence=confidence_value,
         )
         self.session.add(fact)
         self.session.commit()
+        self.session.refresh(fact)
+        if fact.id is not None:
+            resolve_supersedes(self.session, fact.scope_type, fact.scope_key, predicate, fact.id)
+        return True
