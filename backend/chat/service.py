@@ -127,6 +127,11 @@ class ChatService(ChatServiceInterface):
         )
 
         recent = self.last_messages(channel_id)
+        mentioned_agent_member_ids = self.resolve_mentioned_agent_member_ids(
+            channel_id,
+            content,
+            mentioned_member_ids or [],
+        )
         names = self.persona_names()
         if channel.is_system and channel.type == "steward":
             dock_reply = StewardService(self.session).run_dock_message(
@@ -140,7 +145,7 @@ class ChatService(ChatServiceInterface):
         if channel.type == "dm":
             responders = members
         else:
-            return self.maybe_interject(channel, recent, mentioned_member_ids or [])
+            return self.maybe_interject(channel, recent, mentioned_agent_member_ids)
         replies: list[MessageRead] = []
 
         for persona in responders:
@@ -260,8 +265,6 @@ class ChatService(ChatServiceInterface):
             member = by_id.get(member_id)
             if member:
                 ordered.append(member)
-            if len(ordered) >= cap:
-                return ordered
         if mentioned_member_ids:
             return ordered
         try:
@@ -271,6 +274,41 @@ class ChatService(ChatServiceInterface):
         if baseline <= 0 or random.random() >= baseline:
             return []
         return candidate_members[: min(1, cap)]
+
+    def resolve_mentioned_agent_member_ids(
+        self,
+        channel_id: int,
+        content: str,
+        explicit_member_ids: list[int],
+    ) -> list[int]:
+        candidate_members = self.active_agent_member_rows(channel_id)
+        by_id = {member.id: member for member in candidate_members if member.id is not None}
+        ordered: list[int] = []
+        seen: set[int] = set()
+
+        for member_id in explicit_member_ids:
+            if member_id in seen or member_id not in by_id:
+                continue
+            ordered.append(member_id)
+            seen.add(member_id)
+
+        text = content or ""
+        for member in candidate_members:
+            member_id = member.id
+            if member_id is None or member_id in seen:
+                continue
+            persona = self.session.get(Persona, member.member_id or member.persona_id)
+            if not persona:
+                continue
+            labels = {
+                persona.name,
+                agent_display_name(self.session, persona),
+            }
+            if any(_text_mentions_agent(text, label) for label in labels if label):
+                ordered.append(member_id)
+                seen.add(member_id)
+
+        return ordered
 
     def max_ai_replies_per_turn(self, cfg: dict[str, str]) -> int:
         try:
@@ -350,6 +388,8 @@ class ChatService(ChatServiceInterface):
         for line in cleaned.splitlines():
             stripped = line.strip()
             if not stripped:
+                continue
+            if _looks_like_context_transcript(stripped):
                 continue
             if any(term.lower() in stripped.lower() for term in internal_terms) and any(
                 marker in stripped
@@ -674,6 +714,20 @@ class ChatService(ChatServiceInterface):
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _text_mentions_agent(text: str, label: str) -> bool:
+    label = label.strip()
+    if not label:
+        return False
+    return re.search(rf"@{re.escape(label)}(?=$|\s|[，,。！？!?])", text) is not None
+
+
+def _looks_like_context_transcript(text: str) -> bool:
+    author_prefix = r"[^:\n]{1,40}\((?:真人|AI)[^)]*\):"
+    if len(re.findall(author_prefix, text)) >= 1:
+        return True
+    return text.startswith(("最近对话：", "最近对话:"))
 
 
 def seconds_since(value: str | None) -> int:

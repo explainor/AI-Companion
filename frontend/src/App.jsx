@@ -283,7 +283,7 @@ function App() {
   async function sendMessage(text = input) {
     const content = text.trim();
     if (!content || !activeChannel || sending) return;
-    const mentionedIds = mentionedMembers.map((member) => member.channelMemberId);
+    const mentionedIds = mentionedMemberIdsFromContent(content);
     const optimistic = {
       id: `local-${Date.now()}`,
       senderId: "self",
@@ -340,7 +340,7 @@ function App() {
   async function sendAttachment(file, forcedType = null) {
     if (!file || !activeChannel || sending) return;
     const caption = input.trim();
-    const mentionedIds = mentionedMembers.map((member) => member.channelMemberId);
+    const mentionedIds = mentionedMemberIdsFromContent(caption);
     const previewUrl = URL.createObjectURL(file);
     const messageType = forcedType || messageTypeForFile(file);
     const optimistic = {
@@ -627,6 +627,18 @@ function App() {
     );
     setInput((current) => current.replace(/@$/, `@${member.name} `));
     setMentionPickerOpen(false);
+  }
+
+  function mentionedMemberIdsFromContent(content) {
+    const ids = new Set(mentionedMembers.map((member) => member.channelMemberId).filter(Boolean));
+    for (const member of mentionableMembers) {
+      if (!member.channelMemberId) continue;
+      const labels = [member.name, member.rawName].filter(Boolean);
+      if (labels.some((label) => textMentionsMember(content, label))) {
+        ids.add(member.channelMemberId);
+      }
+    }
+    return Array.from(ids);
   }
 
   function updatePersonaField(field, value) {
@@ -2191,6 +2203,13 @@ function memberLabel(member) {
     return member.name.includes("的AI·") ? member.name : `${member.name}·私人AI`;
   }
   return `${member.name}·公共AI`;
+}
+
+function textMentionsMember(text, label) {
+  const name = String(label || "").trim();
+  if (!name) return false;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`@${escaped}(?=$|\\s|[，,。！？!?])`).test(text);
 }
 
 function upsertMessage(current, incoming) {
