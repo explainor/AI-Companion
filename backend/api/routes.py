@@ -55,7 +55,6 @@ from ..schemas import (
 from ..steward.service import StewardService
 from ..steward.service import resolve_supersedes
 from ..steward.predicates import GROUP_ORDER, MEMORY_PREDICATES
-from ..metrics.service import compare as compare_metrics
 from ..metrics.service import session_metrics
 from ..tools.sqlite_store import SQLiteToolStore
 
@@ -812,14 +811,6 @@ def get_channel_metrics(
         if not session.get(Channel, channel_id):
             raise HTTPException(status_code=404, detail="Channel not found")
         return session_metrics(session, channel_id, start, end)
-
-
-@router.get("/channels/{channel_id}/metrics/compare")
-def get_channel_metrics_compare(channel_id: int):
-    with Session(engine) as session:
-        if not session.get(Channel, channel_id):
-            raise HTTPException(status_code=404, detail="Channel not found")
-        return compare_metrics(session, channel_id)
 
 
 @router.get("/todos")
