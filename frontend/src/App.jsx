@@ -17,11 +17,9 @@ import {
   Paperclip,
   Plus,
   Send,
-  Settings,
   Smile,
   Square,
   Trash2,
-  UserPlus,
   X,
 } from "lucide-react";
 import "./styles.css";
@@ -54,7 +52,6 @@ function App() {
   });
   const [identityDraft, setIdentityDraft] = useState("");
   const [users, setUsers] = useState([]);
-  const [metrics, setMetrics] = useState(null);
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "light");
   const [accent, setAccent] = useState(() => localStorage.getItem("accent") || "graphite");
   const [collapsed, setCollapsed] = useState(false);
@@ -68,18 +65,14 @@ function App() {
   const [memoryRecords, setMemoryRecords] = useState({ facts: [], notes: [] });
   const [memoryPredicates, setMemoryPredicates] = useState({ predicates: {}, groupOrder: [] });
   const [personas, setPersonas] = useState([]);
-  const [settings, setSettings] = useState({});
   const [nav, setNav] = useState("chat");
   const [stewardBrief, setStewardBrief] = useState(null);
-  const [stewardOpen, setStewardOpen] = useState(false);
   const [stewardMessages, setStewardMessages] = useState([]);
   const [stewardInput, setStewardInput] = useState("");
   const [stewardSending, setStewardSending] = useState(false);
   const [stewardTyping, setStewardTyping] = useState(false);
   const [tab, setTab] = useState("today");
   const [sheet, setSheet] = useState(null);
-  const [showDebug, setShowDebug] = useState(false);
-  const [paneOpen, setPaneOpen] = useState(false);
   const [selectedPersonaIds, setSelectedPersonaIds] = useState([]);
   const [activePersonaId, setActivePersonaId] = useState(null);
   const [channelTitle, setChannelTitle] = useState("");
@@ -194,7 +187,7 @@ function App() {
 
   useEffect(() => {
     stewardEndRef.current?.scrollIntoView({ block: "end" });
-  }, [stewardMessages, stewardTyping, stewardOpen]);
+  }, [stewardMessages, stewardTyping, sheet]);
 
   function showError(err) {
     setError(err.message || String(err));
@@ -210,7 +203,6 @@ function App() {
       nextMemoryRecords,
       nextMemoryPredicates,
       nextPersonas,
-      nextSettings,
       brief,
       nextUsers,
     ] =
@@ -223,7 +215,6 @@ function App() {
         request("/memory").catch(() => ({ facts: [], notes: [] })),
         request("/memory/predicates").catch(() => ({ predicates: {}, group_order: [] })),
         request("/personas?include_system=true"),
-        request("/settings").then(normalizeSettings),
         request("/steward/brief").catch(() => null),
         request("/users").catch(() => []),
     ]);
@@ -242,7 +233,6 @@ function App() {
     const normalizedPersonas = nextPersonas.map(normalizePersona);
     setPersonas(normalizedPersonas);
     setActivePersonaId((current) => current || normalizedPersonas[0]?.id || null);
-    setSettings(nextSettings);
     setStewardBrief(brief);
     setUsers(nextUsers);
   }
@@ -275,7 +265,6 @@ function App() {
     setStewardInput("");
     setError("");
     setSheet(null);
-    setPaneOpen(false);
   }
 
   async function loadMessages(channelId) {
@@ -582,11 +571,6 @@ function App() {
     );
   }
 
-  async function loadMetricsCompare() {
-    if (!activeChannel) return;
-    setMetrics(await request(`/channels/${activeChannel.id}/metrics/compare`));
-  }
-
   async function createChannel(event) {
     event.preventDefault();
     if (!selectedPersonaIds.length && !selectedUserIds.length) return;
@@ -843,14 +827,6 @@ function App() {
               <strong>{currentUser.display_name}</strong>
               <p>User #{currentUser.id}</p>
             </div>
-            <button
-              className="icon-button small"
-              onClick={() => setSheet("settings")}
-              title="配置"
-              aria-label="配置"
-            >
-              <Settings size={15} />
-            </button>
             <button className="icon-button small logout-button" onClick={handleLogout} title="退出登录" aria-label="退出登录">
               <LogOut size={15} />
             </button>
@@ -870,30 +846,16 @@ function App() {
             </div>
           </div>
           <div className="topbar-actions">
-            <div className="segmented">
-              <button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>
-                浅色
-              </button>
-              <button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>
-                深色
-              </button>
-            </div>
-            <select value={accent} onChange={(event) => setAccent(event.target.value)} aria-label="主题色">
-              <option value="graphite">石墨</option>
-              <option value="slate">蓝灰</option>
-              <option value="sage">鼠尾草</option>
-              <option value="clay">陶土</option>
-            </select>
-            <div className="member-picker-wrap">
+            <div className="topbar-popover-wrap">
               <button
-                className={sheet === "members" ? "icon-button is-open" : "icon-button"}
+                className={sheet === "members" ? "topbar-entry active" : "topbar-entry"}
                 onClick={() => setSheet(sheet === "members" ? null : "members")}
-                title="添加成员"
-                aria-label="添加成员"
+                aria-label="群聊管理"
                 aria-expanded={sheet === "members"}
                 disabled={!activeChannel}
               >
-                <UserPlus size={17} />
+                <Users size={16} />
+                <span>群聊</span>
               </button>
               <MemberSheet
                 open={sheet === "members"}
@@ -904,14 +866,104 @@ function App() {
                 currentUser={currentUser}
                 onAdd={addChannelMember}
                 onRemove={removeChannelMember}
+                onToggleAI={toggleAIEnabled}
+                onClear={clearChannel}
               />
             </div>
-            <button onClick={toggleAIEnabled} disabled={!activeChannel}>
-              {activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}
-            </button>
-            <button onClick={loadMetricsCompare} disabled={!activeChannel}>读数</button>
-            <button onClick={clearChannel} disabled={!activeChannel}>清空</button>
-            <button onClick={() => setSheet("settings")}>设置</button>
+            <div className="topbar-popover-wrap">
+              <button
+                className={sheet === "workbench" ? "topbar-entry active" : "topbar-entry"}
+                onClick={() => setSheet(sheet === "workbench" ? null : "workbench")}
+                aria-label="事项"
+                aria-expanded={sheet === "workbench"}
+              >
+                <Check size={16} />
+                <span>事项</span>
+                {stats.pending > 0 && <em>{stats.pending}</em>}
+              </button>
+              {sheet === "workbench" && (
+                <TopPopover title="事项" onClose={() => setSheet(null)} className="workbench-popover">
+                  <div className="tabs top-popover-tabs">
+                    {[
+                      ["today", "今日", null],
+                      ["tasks", "事项", String(stats.pending)],
+                      ["memory", "记忆", null],
+                    ].map(([key, label, badge]) => (
+                      <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
+                        {label}
+                        {badge && <span>{badge}</span>}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="top-popover-scroll">
+                    <div className="side-panel-anim" key={tab}>
+                      {tab === "today" && (
+                        <TodayPanel
+                          brief={stewardBrief}
+                          focusTodo={focusTodo}
+                          schedule={schedule}
+                          stats={stats}
+                          habits={habits}
+                          onStart={() => focusTodo && sendMessage(`我准备去做：${focusTodo.title}`)}
+                        />
+                      )}
+                      {tab === "tasks" && (
+                        <TasksPanel
+                          todos={todos}
+                          draft={todoDraft}
+                          setDraft={setTodoDraft}
+                          onCreate={createTodo}
+                          onToggle={toggleTodo}
+                          onDelete={deleteTodo}
+                        />
+                      )}
+                      {tab === "memory" && (
+                        <MemoryPanel
+                          memos={memos}
+                          habits={habits}
+                          relations={relations}
+                          records={memoryRecords}
+                          predicateMeta={memoryPredicates}
+                          onRefresh={refreshMemoryRecords}
+                          onUpdateFact={updateMemoryFact}
+                          onDeleteFact={deleteMemoryFact}
+                          onUpdateNote={updatePersonaNote}
+                          onDeleteNote={deletePersonaNote}
+                        />
+                      )}
+                    </div>
+                  </div>
+                </TopPopover>
+              )}
+            </div>
+            <div className="topbar-popover-wrap">
+              <button
+                className={sheet === "steward" ? "topbar-entry active" : "topbar-entry"}
+                onClick={() => setSheet(sheet === "steward" ? null : "steward")}
+                aria-label="管家对话"
+                aria-expanded={sheet === "steward"}
+                disabled={!stewardChannel}
+              >
+                <Bell size={16} />
+                <span>管家</span>
+              </button>
+              {sheet === "steward" && stewardChannel && (
+                <div className="top-popover steward-popover">
+                  <StewardDock
+                    brief={stewardBrief}
+                    open
+                    onToggle={() => setSheet(null)}
+                    messages={stewardMessages}
+                    typing={stewardTyping}
+                    input={stewardInput}
+                    setInput={setStewardInput}
+                    sending={stewardSending}
+                    onSend={sendStewardMessage}
+                    endRef={stewardEndRef}
+                  />
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
@@ -1043,124 +1095,21 @@ function App() {
               </form>
             </div>
           </section>
-
-          <aside className={paneOpen ? "right-pane mobile-open" : "right-pane"}>
-            <div className="tabs">
-              {[
-                ["today", "今日", null],
-                ["tasks", "事项", String(stats.pending)],
-                ["memory", "记忆", null],
-              ].map(([key, label, badge]) => (
-                <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
-                  {label}
-                  {badge && <span>{badge}</span>}
-                </button>
-              ))}
-              <button className="icon-button pane-close" onClick={() => setPaneOpen(false)} aria-label="关闭工作台">
-                <X size={15} />
-              </button>
-            </div>
-
-            <div className="side-scroll">
-              <section className={showDebug ? "debug-panel open" : "debug-panel"}>
-                <button className="debug-head" onClick={() => setShowDebug((value) => !value)}>
-                  <span>
-                    <strong>催化剂读数</strong>
-                    <em>{activeChannel?.aiEnabled ? "AI 在场" : "AI 缺席"}</em>
-                  </span>
-                  <ChevronDown size={15} />
-                </button>
-                {showDebug && (
-                  <>
-                    <button className="debug-refresh" onClick={loadMetricsCompare}>刷新 compare()</button>
-                    {metrics && <pre>{JSON.stringify(metrics, null, 2)}</pre>}
-                  </>
-                )}
-              </section>
-              <div className="side-panel-anim" key={tab}>
-                {tab === "today" && (
-                  <TodayPanel
-                    brief={stewardBrief}
-                    focusTodo={focusTodo}
-                    schedule={schedule}
-                    stats={stats}
-                    habits={habits}
-                    onStart={() => focusTodo && sendMessage(`我准备去做：${focusTodo.title}`)}
-                  />
-                )}
-                {tab === "tasks" && (
-                  <TasksPanel
-                    todos={todos}
-                    draft={todoDraft}
-                    setDraft={setTodoDraft}
-                    onCreate={createTodo}
-                    onToggle={toggleTodo}
-                    onDelete={deleteTodo}
-                  />
-                )}
-                {tab === "memory" && (
-                  <MemoryPanel
-                    memos={memos}
-                    habits={habits}
-                    relations={relations}
-                    records={memoryRecords}
-                    predicateMeta={memoryPredicates}
-                    onRefresh={refreshMemoryRecords}
-                    onUpdateFact={updateMemoryFact}
-                    onDeleteFact={deleteMemoryFact}
-                    onUpdateNote={updatePersonaNote}
-                    onDeleteNote={deletePersonaNote}
-                  />
-                )}
-              </div>
-            </div>
-            {stewardChannel && (
-              <StewardDock
-                brief={stewardBrief}
-                open={stewardOpen}
-                onToggle={() => setStewardOpen((value) => !value)}
-                messages={stewardMessages}
-                typing={stewardTyping}
-                input={stewardInput}
-                setInput={setStewardInput}
-                sending={stewardSending}
-                onSend={sendStewardMessage}
-                endRef={stewardEndRef}
-              />
-            )}
-          </aside>
-          <button className="pane-fab" onClick={() => setPaneOpen(true)} aria-label="打开工作台">
-            <Bell size={20} />
-          </button>
         </div>
           </>
         )}
         {nav === "roles" && (
           <RolePage
-            theme={theme}
-            setTheme={setTheme}
             activePersona={activePersona}
             updatePersonaField={updatePersonaField}
             savePersona={savePersona}
             deletePersona={deletePersona}
             startChatWithPersona={startChatWithPersona}
-            openSettings={() => setSheet("settings")}
             users={users}
           />
         )}
       </section>
 
-      <SettingsSheet
-        open={sheet === "settings"}
-        onOpenChange={(open) => setSheet(open ? "settings" : null)}
-        settings={settings}
-        accent={accent}
-        setAccent={setAccent}
-        goRoles={() => {
-          setNav("roles");
-          setSheet(null);
-        }}
-      />
       <CreateChannelDialog
         open={sheet === "create"}
         onOpenChange={(open) => setSheet(open ? "create" : null)}
@@ -1201,14 +1150,11 @@ function Avatar({ name, hue = 95 }) {
 }
 
 function RolePage({
-  theme,
-  setTheme,
   activePersona,
   updatePersonaField,
   savePersona,
   deletePersona,
   startChatWithPersona,
-  openSettings,
   users,
 }) {
   if (!activePersona) {
@@ -1227,17 +1173,6 @@ function RolePage({
     <div className="role-page">
       <header className="topbar">
         <h2>角色档案</h2>
-        <div className="topbar-actions">
-          <div className="segmented">
-            <button className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>
-              浅色
-            </button>
-            <button className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>
-              深色
-            </button>
-          </div>
-          <button onClick={openSettings}>设置</button>
-        </div>
       </header>
       <div className="role-scroll">
         <div className="role-card">
@@ -1770,49 +1705,17 @@ function StewardDock({
   );
 }
 
-function SettingsSheet({ open, onOpenChange, settings, accent, setAccent, goRoles }) {
+function TopPopover({ title, onClose, className = "", children }) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Overlay className="sheet-overlay" />
-      <Dialog.Content className="sheet">
-        <div className="sheet-title-row">
-          <Dialog.Title>配置</Dialog.Title>
-          <Dialog.Close asChild>
-            <button type="button" className="icon-button small" title="关闭配置" aria-label="关闭配置">
-              <X size={15} />
-            </button>
-          </Dialog.Close>
-        </div>
-        <label>
-          主题色
-          <select value={accent} onChange={(event) => setAccent(event.target.value)}>
-            <option value="graphite">石墨</option>
-            <option value="slate">蓝灰</option>
-            <option value="sage">鼠尾草</option>
-            <option value="clay">陶土</option>
-          </select>
-        </label>
-        <section>
-          <h3>模型</h3>
-          <pre>{JSON.stringify(settings.model || {}, null, 2)}</pre>
-        </section>
-        <section>
-          <h3>角色卡</h3>
-          <div className="persona-settings">
-            <article>
-              <strong>已移到独立角色页</strong>
-              <p>核心设定、说话风格、声音与性格标签都在「角色」页编辑。</p>
-              <button type="button" onClick={goRoles}>前往角色页</button>
-            </article>
-          </div>
-        </section>
-        <div className="modal-actions">
-          <Dialog.Close asChild>
-            <button type="button">关闭</button>
-          </Dialog.Close>
-        </div>
-      </Dialog.Content>
-    </Dialog.Root>
+    <div className={`top-popover ${className}`}>
+      <div className="top-popover-head">
+        <strong>{title}</strong>
+        <button type="button" onClick={onClose} title="关闭" aria-label={`关闭${title}`}>
+          <X size={14} />
+        </button>
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -1895,6 +1798,8 @@ function MemberSheet({
   currentUser,
   onAdd,
   onRemove,
+  onToggleAI,
+  onClear,
 }) {
   const [tab, setTab] = useState("humans");
   const [query, setQuery] = useState("");
@@ -1932,9 +1837,17 @@ function MemberSheet({
   return (
     <div className="member-popover">
       <div className="member-popover-head">
-        <strong>添加成员</strong>
+        <strong>群聊管理</strong>
         <button type="button" onClick={() => onOpenChange(false)} title="关闭">
           <X size={14} />
+        </button>
+      </div>
+      <div className="channel-tools">
+        <button type="button" onClick={onToggleAI} disabled={!channel}>
+          {channel?.aiEnabled ? "AI 在场" : "AI 缺席"}
+        </button>
+        <button type="button" className="danger" onClick={onClear} disabled={!channel}>
+          清空消息
         </button>
       </div>
       <div className="member-tabs">
@@ -2015,79 +1928,6 @@ function MemberSheet({
         )}
       </div>
     </div>
-  );
-}
-
-function LegacyMemberSheet({
-  open,
-  onOpenChange,
-  channel,
-  personas,
-  users,
-  currentUser,
-  onAdd,
-  onRemove,
-}) {
-  const existing = new Set((channel?.members || []).map((member) => `${member.memberType}:${member.id}`));
-  const visiblePersonas = personas.filter(
-    (persona) => !persona.ownerUserId || Number(persona.ownerUserId) === Number(currentUser?.id),
-  );
-  const removable = (member) =>
-    member.memberType !== "agent" ||
-    !member.ownerUserId ||
-    Number(member.ownerUserId) === Number(currentUser?.id);
-  return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Overlay className="sheet-overlay" />
-      <Dialog.Content className="sheet">
-        <Dialog.Title>频道成员</Dialog.Title>
-        <div className="member-manager">
-          <section>
-            <strong>当前成员</strong>
-            {(channel?.members || []).map((member) => (
-              <div className="member-row" key={`${member.memberType}-${member.id}`}>
-                <span>{memberLabel(member)}</span>
-                <button
-                  disabled={!removable(member)}
-                  title={!removable(member) ? "只有 owner 能移除私人 AI" : "移除成员"}
-                  onClick={() => onRemove(member)}
-                >
-                  移除
-                </button>
-              </div>
-            ))}
-          </section>
-          <section>
-            <strong>添加真人</strong>
-            {users.map((user) => (
-              <div className="member-row" key={user.id}>
-                <span>{user.display_name || user.name}·真人</span>
-                <button
-                  disabled={existing.has(`human:${user.id}`)}
-                  onClick={() => onAdd("human", user.id)}
-                >
-                  加入
-                </button>
-              </div>
-            ))}
-          </section>
-          <section>
-            <strong>添加 AI</strong>
-            {visiblePersonas.map((persona) => (
-              <div className="member-row" key={persona.id}>
-                <span>{personaOwnerLabel(persona, users)}</span>
-                <button
-                  disabled={existing.has(`agent:${persona.id}`)}
-                  onClick={() => onAdd("agent", persona.id)}
-                >
-                  加入
-                </button>
-              </div>
-            ))}
-          </section>
-        </div>
-      </Dialog.Content>
-    </Dialog.Root>
   );
 }
 
@@ -2354,23 +2194,6 @@ function memberLabel(member) {
   return `${member.name}·公共AI`;
 }
 
-async function normalizeSettings(settings) {
-  if (!Array.isArray(settings)) return settings;
-  const map = Object.fromEntries(settings.map((item) => [item.key, item.value]));
-  const personas = await request("/personas?include_system=true").catch(() => []);
-  return {
-    model: {
-      chat_strong: map["model.chat_strong"],
-      chat_cheap: map["model.chat_cheap"],
-      steward: map["model.steward"],
-      vision: map["model.vision"],
-    },
-    memory: { backend: map["memory.backend"] },
-    proactivity: { enabled: map["proactivity.enabled"] === "true" },
-    personas: personas.map(normalizePersona),
-  };
-}
-
 function upsertMessage(current, incoming) {
   const filtered = current.filter(
     (item) => !(item.optimistic && item.fromSelf && item.text === incoming.text),
@@ -2445,31 +2268,91 @@ function hueFor(value = "") {
 }
 
 function parseLooseDate(value) {
-  if (!value) return new Date();
-  if (/^\d{4}-\d{2}-\d{2}/.test(value)) return new Date(value);
-  const time = value.match(/(\d{1,2}):(\d{2})/);
-  const date = new Date();
+  const fallback = new Date();
+  if (!value) return fallback;
+  const text = String(value).trim();
+  if (!text) return fallback;
+
+  const date = parseLooseDatePart(text) || new Date();
+  const time = parseLooseTimePart(text);
   if (time) {
-    date.setHours(Number(time[1]), Number(time[2]), 0, 0);
+    date.setHours(time.hour, time.minute, 0, 0);
     return date;
   }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+
+  const parsed = new Date(text);
+  return isValidDate(parsed) ? parsed : date;
 }
 
 function safeDateValue(value) {
-  if (!value) return new Date().toISOString();
-  if (!/^\d{4}-\d{2}-\d{2}/.test(value) && !/(\d{1,2}):(\d{2})/.test(value)) {
-    return value;
-  }
-  return parseLooseDate(value).toISOString();
+  const parsed = parseLooseDate(value);
+  return isValidDate(parsed) ? parsed.toISOString() : new Date().toISOString();
 }
 
 function formatShortTime(value) {
   if (!value) return "";
-  if (!/^\d{4}-\d{2}-\d{2}/.test(value) && !/(\d{1,2}):(\d{2})/.test(value)) return value;
+  const text = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}/.test(text) && !/(\d{1,2}):(\d{2})/.test(text) && !/[早上上午中午下午晚上今晚明早明天后天今天昨天前天].*点/.test(text)) {
+    return text;
+  }
   const date = parseLooseDate(value);
   return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function parseLooseDatePart(text) {
+  const exact = text.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (exact) {
+    const date = new Date(Number(exact[1]), Number(exact[2]) - 1, Number(exact[3]));
+    return isValidDate(date) ? date : null;
+  }
+
+  const date = new Date();
+  if (/后天/.test(text)) date.setDate(date.getDate() + 2);
+  else if (/明天|明早/.test(text)) date.setDate(date.getDate() + 1);
+  else if (/昨天/.test(text)) date.setDate(date.getDate() - 1);
+  else if (/前天/.test(text)) date.setDate(date.getDate() - 2);
+  return date;
+}
+
+function parseLooseTimePart(text) {
+  const colon = text.match(/(\d{1,2}):(\d{2})/);
+  if (colon) {
+    return normalizeLooseHour(Number(colon[1]), Number(colon[2]), text);
+  }
+
+  const cnHour = text.match(/([零〇一二两三四五六七八九十\d]{1,3})点(?:([零〇一二两三四五六七八九十\d]{1,3})分?)?/);
+  if (cnHour) {
+    return normalizeLooseHour(chineseNumber(cnHour[1]), cnHour[2] ? chineseNumber(cnHour[2]) : 0, text);
+  }
+
+  return null;
+}
+
+function normalizeLooseHour(hour, minute, text) {
+  if (!Number.isFinite(hour) || !Number.isFinite(minute) || minute < 0 || minute > 59) return null;
+  let nextHour = hour;
+  if (/下午|晚上|今晚/.test(text) && nextHour >= 1 && nextHour < 12) nextHour += 12;
+  if (/中午/.test(text) && nextHour >= 1 && nextHour < 11) nextHour += 12;
+  if (/凌晨|早上|上午|明早/.test(text) && nextHour === 12) nextHour = 0;
+  if (nextHour < 0 || nextHour > 23) return null;
+  return { hour: nextHour, minute };
+}
+
+function chineseNumber(value) {
+  if (/^\d+$/.test(value)) return Number(value);
+  const digits = { 零: 0, "〇": 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (value === "十") return 10;
+  const tenIndex = value.indexOf("十");
+  if (tenIndex >= 0) {
+    const left = value.slice(0, tenIndex);
+    const right = value.slice(tenIndex + 1);
+    return (left ? digits[left] : 1) * 10 + (right ? digits[right] : 0);
+  }
+  return digits[value] ?? Number.NaN;
+}
+
+function isValidDate(date) {
+  return date instanceof Date && !Number.isNaN(date.getTime());
 }
 
 function formatHour(value) {

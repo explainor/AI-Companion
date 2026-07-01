@@ -1,7 +1,6 @@
 from collections import Counter
 from datetime import datetime, timezone
 from itertools import pairwise
-from typing import Iterable
 
 from sqlmodel import Session, select
 
@@ -17,18 +16,6 @@ def session_metrics(
     messages = _messages(session, channel_id, start, end)
     decisions = _decisions(session, channel_id, start, end)
     return metrics_over(messages, decisions)
-
-
-def compare(session: Session, channel_id: int) -> dict:
-    messages = _messages(session, channel_id, None, None)
-    decisions = _decisions(session, channel_id, None, None)
-    on_msgs = [message for message in messages if bool(message.ai_enabled_snapshot)]
-    off_msgs = [message for message in messages if not bool(message.ai_enabled_snapshot)]
-    grouped = _decisions_by_snapshot(decisions, messages)
-    return {
-        "ai_on": metrics_over(on_msgs, grouped[True]),
-        "ai_off": metrics_over(off_msgs, grouped[False]),
-    }
 
 
 def metrics_over(messages: list[Message], decisions: list[InterjectionDecision]) -> dict:
@@ -92,24 +79,6 @@ def _decisions(
     if end:
         statement = statement.where(InterjectionDecision.created_at < _iso(end))
     return session.exec(statement).all()
-
-
-def _decisions_by_snapshot(
-    decisions: Iterable[InterjectionDecision],
-    messages: list[Message],
-) -> dict[bool, list[InterjectionDecision]]:
-    grouped: dict[bool, list[InterjectionDecision]] = {True: [], False: []}
-    sorted_messages = sorted(messages, key=lambda message: message.created_at)
-    for decision in decisions:
-        previous = None
-        for message in sorted_messages:
-            if message.created_at <= decision.created_at:
-                previous = message
-            else:
-                break
-        if previous is not None:
-            grouped[bool(previous.ai_enabled_snapshot)].append(decision)
-    return grouped
 
 
 def _iso(value: str) -> str:

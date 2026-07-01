@@ -68,32 +68,32 @@ backend/
 │   ├── __init__.py                     # chat 包标记。
 │   ├── agents.py                       # 普通角色 LLM/tool-loop 调用；生成层返回消息段数组。
 │   ├── archive_retrieval.py            # 历史消息检索触发、片段召回和检索 gate 日志。
-│   ├── context_assembler.py            # prompt/上下文拼装唯一入口；owner-private facts 注入限 60 条且过滤 superseded。
-│   ├── media.py                        # 消息媒体文本化；图片可转 data URL 供视觉模型读取。
-│   ├── membership.py                   # 频道成员、真人、AI 显示名与活跃成员查询。
-│   ├── memory.py                       # MemoryStore 实现：SQLite 记忆与 Mem0/Chroma 兼容实现。
-│   ├── relationship.py                 # PersonaState 熟悉度、最近语气、互动时间和里程碑更新。
-│   ├── scope.py                        # ScopeProfile 解析，按 persona.kind 决定 public/relationship/hybrid 作用域。
-│   └── service.py                      # ChatService 主业务：频道、消息、成员、AI 多段回复、SSE、管家触发。
+│   ├── context_assembler.py            # prompt/context 唯一装配入口；基于 ScopeProfile 注入作用域记忆。
+│   ├── media.py                        # 图片/音频/附件消息的文本化上下文标签与图片 data URL。
+│   ├── membership.py                   # 频道成员解析与权限辅助。
+│   ├── memory.py                       # 摘要/事实抽取入口，确保在 AI 回复落库后运行。
+│   ├── relationship.py                 # 角色关系状态更新。
+│   ├── scope.py                        # ScopeProfile 与公共/私人/混合作用域判定。
+│   └── service.py                      # 聊天发送、AI 回复、多段落库、SSE 推送主流程。
 ├── core/
 │   ├── __init__.py                     # core 包标记。
-│   ├── config.py                       # 默认配置、settings 读取和模型解析。
-│   ├── interfaces.py                   # ToolStore、MemoryStore、ChatService、Transport 抽象接口。
-│   ├── llm.py                          # LiteLLM 封装、provider_ready、tool loop、调用计数。
-│   ├── time_context.py                 # 当前时间、频道间隔、角色间隔等时间上下文。
-│   └── transport.py                    # SSETransport：push/push_nowait/subscribe。
+│   ├── config.py                       # settings/env 配置读取。
+│   ├── interfaces.py                   # LLM/传输等接口定义。
+│   ├── llm.py                          # LiteLLM 调用封装。
+│   ├── time_context.py                 # 时间上下文辅助。
+│   └── transport.py                    # SSE 事件总线。
 ├── metrics/
 │   ├── __init__.py                     # metrics 包标记。
-│   └── service.py                      # AI 在场/缺席、人↔人/人↔AI 换手和插话指标计算。
+│   └── service.py                      # 只读 metrics 聚合；保留 /metrics，已移除 compare 分组接口。
 ├── presence/
 │   ├── __init__.py                     # presence 包标记。
-│   ├── context.py                      # PresenceContext 数据结构。
-│   ├── policy.py                       # InterjectionPolicy：是否插话与生成短回复；返回消息段列表。
-│   └── triggers.py                     # presence 配置读取、基础概率/cooldown/cheap gate 判断。
+│   ├── context.py                      # presence 决策上下文。
+│   ├── policy.py                       # AI 插话策略，配置驱动。
+│   └── triggers.py                     # @/点名/触发词等触发器。
 ├── steward/
 │   ├── __init__.py                     # steward 包标记。
-│   ├── agent.py                        # 管家 LLM/tool-loop 入口，提示词注入 MEMORY_PREDICATES，最多写 3 条 memory facts。
-│   ├── predicates.py                   # 18 个受控 memory_facts predicate、中文标签、分组和 update_behavior 常量。
+│   ├── agent.py                        # 管家 LLM/tool-loop 入口，提示词注入 MEMORY_PREDICATES。
+│   ├── predicates.py                   # 受控 memory_facts predicate、中文标签、分组和 update_behavior 常量。
 │   └── service.py                      # 管家后台分析、dock 回复、主动提醒 tick、受控 facts 落库和 resolve_supersedes。
 └── tools/
     ├── __init__.py                     # tools 包标记。
@@ -105,7 +105,7 @@ backend/
 ```text
 frontend/src/
 ├── App.jsx       # React 主入口与全部页面/面板组件；聊天输入支持表情、图片、通用附件、浏览器录音和无频道禁用态。
-└── styles.css    # 全局样式、三栏布局、聊天气泡、附件/音频展示、配置弹窗、右侧面板、记忆分组和响应式规则。
+└── styles.css    # 全局样式、聊天布局、右上角小窗、聊天气泡、附件/音频展示、记忆分组和响应式规则。
 ```
 
 ### 数据库表结构
@@ -160,7 +160,6 @@ GET    /api/channels/{channel_id}/events
 POST   /api/channels/{channel_id}/attachments
 POST   /api/channels/{channel_id}/ai_enabled
 GET    /api/channels/{channel_id}/metrics
-GET    /api/channels/{channel_id}/metrics/compare
 GET    /api/todos
 POST   /api/todos
 PATCH  /api/todos/{todo_id}
@@ -200,11 +199,12 @@ GET      /admin                          # 精确重定向到 /admin/
 
 - [x] `/admin` 挂载 starlette-admin，使用 Starlette SessionMiddleware 和 settings 表中的 admin.username/admin.password_hash 登录。
 - [x] 普通 API persona 编辑守卫收紧：system 不可编辑，entertainment 不可编辑/删除，owned 仅 creator_user_id 对应用户可编辑/删除。
-- [x] 群聊顶部 `+` 成员面板：真人 / AI 双标签、搜索、已在频道成员过滤、点击即加入。
+- [x] 聊天页右上角只保留三个入口：群聊、事项、管家；分别以小窗打开频道管理、事项工作台和管家对话。
+- [x] 群聊管理小窗：真人 / AI 双标签、搜索、已在频道成员过滤、点击即加入；同时承载 AI 在场/缺席与清空消息等频道级动作。
 - [x] AI 面板分组：我的 AI 显示当前用户 owned 与 system 管家，娱乐 AI 显示全部 entertainment；他人 owned 不展示。
 - [x] 成员移除 API 守卫：频道创建者可移除成员；真人可移除自己；AI owner 可移除自己的 AI；其他情况 403。
-- [x] 右侧“记忆”tab 提供结构化事实 `memory_facts` 和角色笔记 `persona_notes` 查看、刷新、编辑、删除管理界面。
-- [x] `MEMORY_PREDICATES` 定义 18 个受控 predicate，每个包含 `label` / `group` / `update_behavior`。
+- [x] 事项小窗内的“记忆”tab 提供结构化事实 `memory_facts` 和角色笔记 `persona_notes` 查看、刷新、编辑、删除管理界面。
+- [x] `MEMORY_PREDICATES` 定义受控 predicate，每个包含 `label` / `group` / `update_behavior`。
 - [x] 管家静默分析提示词注入受控词表、memory_facts vs todos/habits 边界、最多 3 条写入规则。
 - [x] 管家 `write_memory_fact` 写入路径校验 predicate 必须在词表内；习惯不再同步写入 memory_facts。
 - [x] overwrite 类 predicate 写入后由 `resolve_supersedes()` 将同 scope 同 predicate 的旧有效事实标记为 superseded。
@@ -214,22 +214,20 @@ GET      /admin                          # 精确重定向到 /admin/
 - [x] `/api/memory/predicates` 返回词表和分组顺序。
 - [x] `/api/memory/facts` 支持手动创建 owner-private fact，并校验 predicate 词表。
 - [x] `context_assembler.py` owner-private facts 注入过滤 superseded，按 `created_at DESC LIMIT 60` 控制 token 膨胀。
-- [x] 前端记忆 tab 按词表分组顺序展示：基本信息 → 偏好 → 进行中的事 → 最近状态 → 关系 → 近期。
-- [x] 前端 fact 卡片显示中文 predicate 标签、content、置信度和日期；编辑只修改 content，predicate 不可改。
+- [x] 前端记忆 tab 按词表分组顺序展示，fact 卡片显示中文 predicate 标签、content、置信度和日期。
 - [x] 角色生成层返回消息段数组；保存时每段独立落库并推送，typing 延迟复用原机制。
 - [x] SSE `message` / `typing` / `proactive` 事件推送。
 - [x] Todo CRUD、完成、删除、reorder 接口占位兼容。
 - [x] 频道创建、重命名、清空消息、删除非系统频道。
 - [x] 双真人薄身份：`users` 表与 `X-User-Id`。
-- [x] 群聊 AI 在场/缺席开关与 metrics compare。
+- [x] 群聊 AI 在场/缺席开关；催化剂读数 UI、`刷新 compare()` 和 `/metrics/compare` 已移除。
 - [x] 图片附件上传与图片消息展示。
 - [x] 聊天输入表情面板：点击表情按钮后插入 emoji 到当前输入框。
 - [x] 通用文件上传：附件按钮可上传非图片文件，消息气泡显示文件名并可下载。
 - [x] 语音消息：浏览器 `MediaRecorder` 录音后按音频附件发送，气泡内可直接播放。
 - [x] 媒体上下文标签：图片、语音、附件分别进入最近对话文本化标签，避免 AI 看到空消息。
-- [x] 配置弹窗提供明确关闭入口：标题栏 X 与底部“关闭”均可退出。
-- [x] 无频道状态下频道相关按钮禁用：添加成员、AI 在场/缺席、读数、清空、快捷话术和输入工具不会表现为“点了没反应”。
-- [x] 侧栏折叠和账户配置图标补齐 `aria-label/title`，浏览器可访问性树中不再是空按钮。
+- [x] 无频道状态下频道相关按钮禁用：群聊管理、快捷话术和输入工具不会表现为“点了没反应”。
+- [x] 已删除聊天页配置弹窗、账户区设置齿轮、主题/主题色顶栏控件、右侧常驻工作台和移动端工作台 FAB。
 - [ ] `SQLiteToolStore.reorder_todos()` 当前不改变物理顺序，只保留接口兼容。
 - [ ] 主动提醒是保守实现：只按带 `due_time` 的 pending todo 生成固定提醒，不做复杂日程判断。
 - [ ] 工具侧未接 Vikunja / Super Productivity，仍是自建 SQLiteToolStore。
@@ -273,12 +271,14 @@ def memory_fact_payload(fact: MemoryFact, persona_names: dict[int, str], channel
 def get_memory_records(include_superseded: bool = Query(default=False), x_user_id: str | None = Header(default=None, alias="X-User-Id"))
 def get_memory_predicates()
 def create_memory_fact(payload: MemoryFactCreate, x_user_id: str | None = Header(default=None, alias="X-User-Id"))
+async def upload_attachment(channel_id: int, file: UploadFile = File(...), x_user_id: str | None = Header(default=None, alias="X-User-Id"))
+def post_message(channel_id: int, payload: MessageCreate, x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> list[MessageRead]
 ```
 
 ```python
-# backend/api/routes.py
-async def upload_attachment(channel_id: int, file: UploadFile = File(...), x_user_id: str | None = Header(default=None, alias="X-User-Id"))
-def post_message(channel_id: int, payload: MessageCreate, x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> list[MessageRead]
+# backend/metrics/service.py
+def session_metrics(session: Session, channel_id: int, start: str | None = None, end: str | None = None) -> dict
+def metrics_over(messages: list[Message], decisions: list[InterjectionDecision]) -> dict
 ```
 
 ```python
@@ -290,8 +290,8 @@ def image_message_to_data_url(message: Message) -> str | None
 
 ```jsx
 // frontend/src/App.jsx
-function SettingsSheet({ open, onOpenChange, settings, accent, setAccent, goRoles })
-function MemberSheet({ open, onOpenChange, channel, personas, users, currentUser, onAdd, onRemove })
+function TopPopover({ title, onClose, className = "", children })
+function MemberSheet({ open, onOpenChange, channel, personas, users, currentUser, onAdd, onRemove, onToggleAI, onClear })
 function IconShell({ title, children, onClick, active = false, disabled = false })
 ```
 
@@ -303,10 +303,9 @@ def _owner_private_memory_facts(session: Session, profile: ScopeProfile, persona
 
 ### 扫描备注
 
-- 后端扫描：`Get-ChildItem -Path backend -Recurse -File -Filter *.py`，当前 38 个 `.py` 文件。
+- 后端扫描：PowerShell `Get-ChildItem -Path backend -Recurse -File -Filter *.py`，当前 40 个 `.py` 文件。
 - 前端扫描：`frontend/src/App.jsx`、`frontend/src/styles.css`。
 - 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮未新增表/列。
-- API 路由扫描：`rg -n "@router\.(get|post|patch|delete)" backend`，本轮未新增/修改 API。
+- API 路由扫描：`rg -n "@router\.(get|post|patch|delete)" backend`；`/api/channels/{channel_id}/metrics/compare` 已移除，`/api/channels/{channel_id}/metrics` 保留。
 - 必跑检查：`python -m compileall backend scripts` 通过；`python scripts/smoke_two_users.py` 通过；`npm.cmd run build` 通过。
-- 浏览器 QA：本地 `http://127.0.0.1:5173` 复测表情插入、右侧事项/记忆/读数、配置弹窗关闭和无频道禁用态；未触发清空、删除、发送消息、文件上传或麦克风授权。
-- 本轮功能范围：按钮可用性巡检与前端交互修补；未改数据库迁移，未改已验收 smoke 脚本。
+- 本轮功能范围：砍掉“催化剂读数”调试 UI、顶部“读数”按钮、`刷新 compare()` 调用、后端 compare 路由与 compare 聚合函数；随后将聊天页右上角收敛为“群聊 / 事项 / 管家”三个小窗入口，删除设置弹窗、右侧常驻工作台和配置类顶栏控件。
