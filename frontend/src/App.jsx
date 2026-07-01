@@ -17,6 +17,7 @@ import {
   Paperclip,
   Plus,
   Send,
+  Settings,
   Smile,
   Square,
   Trash2,
@@ -838,8 +839,13 @@ function App() {
               <strong>{currentUser.display_name}</strong>
               <p>User #{currentUser.id}</p>
             </div>
-            <button className="icon-button small logout-button" onClick={handleLogout} title="退出登录" aria-label="退出登录">
-              <LogOut size={15} />
+            <button
+              className="icon-button small settings-button"
+              onClick={() => setSheet("settings")}
+              title="设置"
+              aria-label="设置"
+            >
+              <Settings size={15} />
             </button>
           </div>
         )}
@@ -999,17 +1005,6 @@ function App() {
             </div>
 
             <div className="composer">
-              <div className="suggestions">
-                {(activeChannel?.type === "group"
-                  ? ["@角色 收到", "定个时间"]
-                  : ["排进事项", "稍后提醒我"]
-                ).map((text) => (
-                  <button key={text} onClick={() => sendMessage(text)} disabled={!activeChannel || sending}>
-                    {text}
-                  </button>
-                ))}
-                {activeChannel?.type === "group" && <span>AI 默认沉默，@ 或点名更容易触发</span>}
-              </div>
               {(mentionedMembers.length > 0 || mentionPickerOpen) && (
                 <div className="mention-strip">
                   {mentionedMembers.map((member) => (
@@ -1141,6 +1136,16 @@ function App() {
         draft={newRoleDraft}
         setDraft={setNewRoleDraft}
         onSubmit={createRole}
+      />
+      <SettingsDialog
+        open={sheet === "settings"}
+        onOpenChange={(open) => setSheet(open ? "settings" : null)}
+        currentUser={currentUser}
+        theme={theme}
+        setTheme={setTheme}
+        accent={accent}
+        setAccent={setAccent}
+        onLogout={handleLogout}
       />
       {error && (
         <div className="toast">
@@ -1795,6 +1800,68 @@ function CreateChannelDialog({
             <button disabled={!selectedIds.length && !selectedUserIds.length}>创建</button>
           </div>
         </form>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function SettingsDialog({ open, onOpenChange, currentUser, theme, setTheme, accent, setAccent, onLogout }) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Overlay className="sheet-overlay" />
+      <Dialog.Content className="settings-modal">
+        <div className="settings-head">
+          <Dialog.Title>设置</Dialog.Title>
+          <Dialog.Close asChild>
+            <button type="button" className="icon-button small" title="关闭设置" aria-label="关闭设置">
+              <X size={15} />
+            </button>
+          </Dialog.Close>
+        </div>
+
+        <div className="settings-scroll">
+          <section className="settings-section">
+            <h3>账号</h3>
+            <div className="settings-account">
+              <Avatar name={currentUser?.display_name || "我"} hue={280} />
+              <div>
+                <strong>{currentUser?.display_name || "未登录"}</strong>
+                <p>User #{currentUser?.id || "-"}</p>
+              </div>
+            </div>
+          </section>
+
+          <section className="settings-section">
+            <h3>外观</h3>
+            <label className="settings-field">
+              <span>主题</span>
+              <div className="segmented settings-segmented">
+                <button type="button" className={theme === "light" ? "active" : ""} onClick={() => setTheme("light")}>
+                  浅色
+                </button>
+                <button type="button" className={theme === "dark" ? "active" : ""} onClick={() => setTheme("dark")}>
+                  深色
+                </button>
+              </div>
+            </label>
+            <label className="settings-field">
+              <span>主题色</span>
+              <select value={accent} onChange={(event) => setAccent(event.target.value)}>
+                <option value="graphite">石墨</option>
+                <option value="slate">蓝灰</option>
+                <option value="sage">鼠尾草</option>
+                <option value="clay">陶土</option>
+              </select>
+            </label>
+          </section>
+        </div>
+
+        <div className="settings-footer">
+          <button type="button" className="logout-action" onClick={onLogout}>
+            <LogOut size={16} />
+            <span>退出登录</span>
+          </button>
+        </div>
       </Dialog.Content>
     </Dialog.Root>
   );
