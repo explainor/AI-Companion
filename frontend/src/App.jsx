@@ -1227,13 +1227,6 @@ function RolePage({
               onChange={(event) => updatePersonaField("style", event.target.value)}
             />
           </label>
-          <label className="role-field">
-            <span>声音</span>
-            <input
-              value={activePersona.voice}
-              onChange={(event) => updatePersonaField("voice", event.target.value)}
-            />
-          </label>
           <TagEditor
             traits={activePersona.traits}
             onChange={(traits) => updatePersonaField("traits", traits)}
