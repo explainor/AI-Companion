@@ -455,7 +455,6 @@ function App() {
       optimistic: true,
     };
     setStewardInput("");
-    setStewardOpen(true);
     setStewardSending(true);
     setError("");
     setStewardMessages((current) => [...current, optimistic]);
@@ -2201,14 +2200,14 @@ function upsertMessage(current, incoming) {
   if (filtered.some((item) => String(item.id) === String(incoming.id))) {
     return filtered.map((item) => (String(item.id) === String(incoming.id) ? incoming : item));
   }
-  return [...filtered, incoming].sort((a, b) => new Date(a.at) - new Date(b.at));
+  return [...filtered, incoming].sort((a, b) => dateSortValue(a.at) - dateSortValue(b.at));
 }
 
 function withDateSeparators(messages) {
   let last = "";
   const rows = [];
   for (const message of messages) {
-    const key = new Date(message.at).toLocaleDateString("zh-CN");
+    const key = dateLabelKey(message.at);
     if (key !== last) {
       rows.push({ kind: "date", id: `date-${key}`, text: relativeDate(message.at) });
       last = key;
@@ -2296,6 +2295,7 @@ function formatShortTime(value) {
     return text;
   }
   const date = parseLooseDate(value);
+  if (!isValidDate(date)) return text;
   return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 }
 
@@ -2355,6 +2355,16 @@ function isValidDate(date) {
   return date instanceof Date && !Number.isNaN(date.getTime());
 }
 
+function dateSortValue(value) {
+  const date = parseLooseDate(value);
+  return isValidDate(date) ? date.getTime() : 0;
+}
+
+function dateLabelKey(value) {
+  const date = parseLooseDate(value);
+  return isValidDate(date) ? date.toLocaleDateString("zh-CN") : "时间未知";
+}
+
 function formatHour(value) {
   return formatShortTime(value) || "--:--";
 }
@@ -2362,7 +2372,7 @@ function formatHour(value) {
 function relativeDate(value) {
   const date = parseLooseDate(value);
   const today = new Date().toLocaleDateString("zh-CN");
-  const target = date.toLocaleDateString("zh-CN");
+  const target = isValidDate(date) ? date.toLocaleDateString("zh-CN") : "时间未知";
   return target === today ? "今天" : target;
 }
 
