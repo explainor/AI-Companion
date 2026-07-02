@@ -445,6 +445,7 @@ class ChatService(ChatServiceInterface):
                         "member_type": "human",
                         "name": user.display_name,
                         "display_name": user.display_name,
+                        "avatar_url": user.avatar_url,
                     }
                 )
                 continue
@@ -494,6 +495,9 @@ class ChatService(ChatServiceInterface):
         if message.author_user_id:
             user = self.session.get(User, message.author_user_id)
             user_name = user.display_name if user else None
+            user_avatar_url = user.avatar_url if user else None
+        else:
+            user_avatar_url = None
         return MessageRead(
             id=message.id,
             channel_id=message.channel_id,
@@ -503,6 +507,7 @@ class ChatService(ChatServiceInterface):
             author_type=message.author_type or ("ai" if message.sender == "persona" else "human"),
             author_user_id=message.author_user_id,
             author_user_name=user_name,
+            author_avatar_url=user_avatar_url,
             ai_enabled_snapshot=bool(message.ai_enabled_snapshot),
             type=message.message_type or "text",
             media_url=message.media_url,

@@ -51,6 +51,9 @@ def migrate_sqlite() -> None:
                 """
             )
         table_migrations = {
+            "users": [
+                ("avatar_url", "TEXT"),
+            ],
             "channels": [
                 ("is_system", "INTEGER DEFAULT 0"),
                 ("pinned", "INTEGER"),

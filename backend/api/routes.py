@@ -51,6 +51,7 @@ from ..schemas import (
     TodoUpdate,
     UserCreate,
     UserRead,
+    UserUpdate,
 )
 from ..steward.service import StewardService
 from ..steward.service import resolve_supersedes
@@ -82,6 +83,15 @@ def safe_upload_name(filename: str | None) -> str:
     name = Path(raw).name
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
     return cleaned or "upload"
+
+
+def clean_avatar_url(value: str | None) -> str | None:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return None
+    if cleaned.startswith(("/uploads/", "http://", "https://", "data:image/")):
+        return cleaned
+    raise HTTPException(status_code=400, detail="avatar_url must be an upload path, http(s) URL, or data image")
 
 
 def upload_suffix(filename: str, content_type: str) -> str:
@@ -480,7 +490,13 @@ async def create_user(request: Request) -> User:
             ensure_user_steward(session, existing)
             session.refresh(existing)
             return existing
-        user = User(display_name=name)
+        avatar_url = clean_avatar_url(
+            payload.get("avatar_url")
+            or payload.get("avatarUrl")
+            or request.query_params.get("avatar_url")
+            or request.query_params.get("avatarUrl")
+        )
+        user = User(display_name=name, avatar_url=avatar_url)
         session.add(user)
         session.commit()
         session.refresh(user)
@@ -501,6 +517,68 @@ def get_user(user_id: int) -> User:
         user = session.get(User, user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+        return user
+
+
+@router.patch("/users/{user_id}", response_model=UserRead)
+def update_user(
+    user_id: int,
+    payload: UserUpdate,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> User:
+    with Session(engine) as session:
+        current = get_current_user(session, x_user_id)
+        if current.id != user_id:
+            raise HTTPException(status_code=403, detail="Cannot edit another user")
+        user = session.get(User, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        name = payload.display_name or payload.displayName or payload.name
+        if name is not None:
+            cleaned = name.strip()
+            if not cleaned:
+                raise HTTPException(status_code=400, detail="display_name cannot be empty")
+            user.display_name = cleaned
+        if payload.avatar_url is not None or payload.avatarUrl is not None:
+            user.avatar_url = clean_avatar_url(payload.avatar_url if payload.avatar_url is not None else payload.avatarUrl)
+        session.add(user)
+        session.commit()
+        session.refresh(user)
+        return user
+
+
+@router.post("/users/{user_id}/avatar", response_model=UserRead)
+async def upload_user_avatar(
+    user_id: int,
+    file: UploadFile = File(...),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> User:
+    content_type = file.content_type or "application/octet-stream"
+    if content_type.split(";", 1)[0].lower() not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
+        raise HTTPException(status_code=400, detail="avatar must be png, jpeg, gif, or webp")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large")
+    with Session(engine) as session:
+        current = get_current_user(session, x_user_id)
+        if current.id != user_id:
+            raise HTTPException(status_code=403, detail="Cannot edit another user")
+        user = session.get(User, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        original_name = safe_upload_name(file.filename)
+        suffix = upload_suffix(original_name, content_type)
+        target_dir = UPLOAD_ROOT / "avatars" / f"user_{user_id}"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        stored_name = f"{uuid.uuid4().hex}{suffix}"
+        target = target_dir / stored_name
+        target.write_bytes(data)
+        user.avatar_url = f"/uploads/avatars/user_{user_id}/{stored_name}"
+        session.add(user)
+        session.commit()
+        session.refresh(user)
         return user
 
 
@@ -675,6 +753,12 @@ def get_channel_members(channel_id: int):
                     "member_type": member.member_type,
                     "member_id": member.member_id,
                     "name": member_display_name(session, member),
+                    "avatar_url": (
+                        session.get(User, member.member_id or member.user_id).avatar_url
+                        if member.member_type == "human"
+                        and session.get(User, member.member_id or member.user_id)
+                        else None
+                    ),
                     "active": bool(member.active),
                     "added_by_user_id": member.added_by_user_id,
                     "left_at": member.left_at,
@@ -694,11 +778,13 @@ def add_channel_member(
         user = get_current_user(session, x_user_id)
         channel = ChatService(session).get_channel(channel_id)
         member = add_member(session, channel, payload.member_type, payload.member_id, user.id)
+        human = session.get(User, member.member_id or member.user_id) if member.member_type == "human" else None
         return {
             "id": member.id,
             "member_type": member.member_type,
             "member_id": member.member_id,
             "name": member_display_name(session, member),
+            "avatar_url": human.avatar_url if human else None,
             "active": bool(member.active),
             "owner_user_id": (
                 session.get(PersonaCard, member.member_id or member.persona_id).owner_user_id

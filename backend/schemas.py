@@ -49,6 +49,7 @@ class MessageRead(BaseModel):
     author_type: str = "human"
     author_user_id: Optional[int] = None
     author_user_name: Optional[str] = None
+    author_avatar_url: Optional[str] = None
     ai_enabled_snapshot: bool = True
     type: str = "text"
     media_url: Optional[str] = None
@@ -136,12 +137,23 @@ class UserCreate(BaseModel):
     display_name: Optional[str] = None
     displayName: Optional[str] = None
     name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    avatarUrl: Optional[str] = None
 
 
 class UserRead(BaseModel):
     id: int
     display_name: str
+    avatar_url: Optional[str] = None
     created_at: str
+
+
+class UserUpdate(BaseModel):
+    display_name: Optional[str] = None
+    displayName: Optional[str] = None
+    name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    avatarUrl: Optional[str] = None
 
 
 class AIEnabledUpdate(BaseModel):

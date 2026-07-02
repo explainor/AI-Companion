@@ -49,7 +49,8 @@ function App() {
   const [currentUser, setCurrentUser] = useState(() => {
     const id = sessionStorage.getItem("user_id");
     const displayName = sessionStorage.getItem("display_name");
-    return id && displayName ? { id: Number(id), display_name: displayName } : null;
+    const avatarUrl = sessionStorage.getItem("avatar_url") || "";
+    return id && displayName ? { id: Number(id), display_name: displayName, avatar_url: avatarUrl } : null;
   });
   const [identityDraft, setIdentityDraft] = useState("");
   const [users, setUsers] = useState([]);
@@ -92,6 +93,7 @@ function App() {
   const stewardEndRef = useRef(null);
   const imageInputRef = useRef(null);
   const fileInputRef = useRef(null);
+  const avatarInputRef = useRef(null);
   const recorderRef = useRef(null);
   const recordingChunksRef = useRef([]);
 
@@ -249,6 +251,7 @@ function App() {
     });
     sessionStorage.setItem("user_id", String(user.id));
     sessionStorage.setItem("display_name", user.display_name);
+    sessionStorage.setItem("avatar_url", user.avatar_url || "");
     setCurrentUser(user);
     setIdentityDraft("");
   }
@@ -256,6 +259,7 @@ function App() {
   function handleLogout() {
     sessionStorage.removeItem("user_id");
     sessionStorage.removeItem("display_name");
+    sessionStorage.removeItem("avatar_url");
     setCurrentUser(null);
     setIdentityDraft("");
     setMessages([]);
@@ -599,6 +603,43 @@ function App() {
     setChannels(nextChannels.map(normalizeChannel));
   }
 
+  function rememberCurrentUser(user) {
+    sessionStorage.setItem("user_id", String(user.id));
+    sessionStorage.setItem("display_name", user.display_name);
+    sessionStorage.setItem("avatar_url", user.avatar_url || "");
+    setCurrentUser(user);
+    setUsers((current) => current.map((item) => (Number(item.id) === Number(user.id) ? user : item)));
+  }
+
+  async function saveCurrentUser(fields) {
+    if (!currentUser) return;
+    const saved = await request(`/users/${currentUser.id}`, {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    });
+    rememberCurrentUser(saved);
+    await Promise.all([refreshChannels(), activeChannel ? loadMessages(activeChannel.id) : Promise.resolve()]);
+  }
+
+  async function uploadCurrentUserAvatar(file) {
+    if (!currentUser || !file) return;
+    const userId = sessionStorage.getItem("user_id");
+    const form = new FormData();
+    form.append("file", file);
+    const response = await fetch(`${API}/users/${currentUser.id}/avatar`, {
+      method: "POST",
+      headers: userId ? { "X-User-Id": userId } : {},
+      body: form,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text || response.statusText);
+    }
+    const saved = await response.json();
+    rememberCurrentUser(saved);
+    await Promise.all([refreshChannels(), activeChannel ? loadMessages(activeChannel.id) : Promise.resolve()]);
+  }
+
   async function addChannelMember(memberType, memberId) {
     if (!activeChannel) return;
     await request(`/channels/${activeChannel.id}/members`, {
@@ -786,7 +827,7 @@ function App() {
                     className={channel.id === activeChannel?.id ? "channel-row active" : "channel-row"}
                     onClick={() => setActiveId(channel.id)}
                   >
-                    <Avatar name={channel.title} hue={channel.avatarHue} />
+                    <Avatar name={channel.title} hue={channel.avatarHue} src={channel.avatarUrl} />
                     {!collapsed && (
                       <div className="channel-copy">
                         <div className="channel-line">
@@ -834,7 +875,7 @@ function App() {
 
         {!collapsed && (
           <div className="account-row">
-            <Avatar name={currentUser.display_name || "我"} hue={280} />
+            <Avatar name={currentUser.display_name || "我"} hue={280} src={currentUser.avatar_url} />
             <div>
               <strong>{currentUser.display_name}</strong>
               <p>User #{currentUser.id}</p>
@@ -856,7 +897,7 @@ function App() {
           <>
         <header className="topbar">
           <div className="active-title">
-            <Avatar name={activeChannel?.title || "C"} hue={activeChannel?.avatarHue || 95} />
+            <Avatar name={activeChannel?.title || "C"} hue={activeChannel?.avatarHue || 95} src={activeChannel?.avatarUrl} />
             <div>
               <h2>{activeChannel?.title || "频道"}</h2>
               <p>{activeMembers}</p>
@@ -1141,6 +1182,9 @@ function App() {
         open={sheet === "settings"}
         onOpenChange={(open) => setSheet(open ? "settings" : null)}
         currentUser={currentUser}
+        avatarInputRef={avatarInputRef}
+        onSaveProfile={saveCurrentUser}
+        onUploadAvatar={uploadCurrentUserAvatar}
         theme={theme}
         setTheme={setTheme}
         accent={accent}
@@ -1157,10 +1201,10 @@ function App() {
   );
 }
 
-function Avatar({ name, hue = 95 }) {
+function Avatar({ name, hue = 95, src = "" }) {
   return (
     <div className="avatar" style={{ "--hue": hue }}>
-      {initial(name)}
+      {src ? <img src={src} alt={name || "头像"} /> : initial(name)}
     </div>
   );
 }
@@ -1300,7 +1344,7 @@ function MessageBubble({ message, showName }) {
   }
   return (
     <div className={`message-row incoming ${message.authorType === "human" ? "other-human" : "ai-author"}`}>
-      <Avatar name={message.senderName} hue={message.avatarHue} />
+      <Avatar name={message.senderName} hue={message.avatarHue} src={message.avatarUrl} />
       <div className="bubble-stack">
         {showName && <em>{message.senderName}</em>}
         <div className={`bubble ${message.authorType === "human" ? "human" : "ai"}`}>{content}</div>
@@ -1798,7 +1842,56 @@ function CreateChannelDialog({
   );
 }
 
-function SettingsDialog({ open, onOpenChange, currentUser, theme, setTheme, accent, setAccent, onLogout }) {
+function SettingsDialog({
+  open,
+  onOpenChange,
+  currentUser,
+  avatarInputRef,
+  onSaveProfile,
+  onUploadAvatar,
+  theme,
+  setTheme,
+  accent,
+  setAccent,
+  onLogout,
+}) {
+  const [profileDraft, setProfileDraft] = useState({ displayName: "", avatarUrl: "" });
+  const [savingProfile, setSavingProfile] = useState(false);
+
+  useEffect(() => {
+    if (!open || !currentUser) return;
+    setProfileDraft({
+      displayName: currentUser.display_name || "",
+      avatarUrl: currentUser.avatar_url || "",
+    });
+  }, [open, currentUser?.id, currentUser?.display_name, currentUser?.avatar_url]);
+
+  async function submitProfile(event) {
+    event.preventDefault();
+    if (!currentUser || savingProfile) return;
+    setSavingProfile(true);
+    try {
+      await onSaveProfile({
+        display_name: profileDraft.displayName,
+        avatar_url: profileDraft.avatarUrl,
+      });
+    } finally {
+      setSavingProfile(false);
+    }
+  }
+
+  async function chooseAvatar(event) {
+    const file = event.target.files?.[0];
+    if (!file || savingProfile) return;
+    setSavingProfile(true);
+    try {
+      await onUploadAvatar(file);
+    } finally {
+      setSavingProfile(false);
+      if (event.target) event.target.value = "";
+    }
+  }
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Overlay className="sheet-overlay" />
@@ -1816,12 +1909,47 @@ function SettingsDialog({ open, onOpenChange, currentUser, theme, setTheme, acce
           <section className="settings-section">
             <h3>账号</h3>
             <div className="settings-account">
-              <Avatar name={currentUser?.display_name || "我"} hue={280} />
+              <Avatar name={currentUser?.display_name || "我"} hue={280} src={currentUser?.avatar_url} />
               <div>
                 <strong>{currentUser?.display_name || "未登录"}</strong>
                 <p>User #{currentUser?.id || "-"}</p>
               </div>
             </div>
+            <form className="settings-profile-form" onSubmit={submitProfile}>
+              <label className="settings-field stack">
+                <span>昵称</span>
+                <input
+                  value={profileDraft.displayName}
+                  onChange={(event) => setProfileDraft((draft) => ({ ...draft, displayName: event.target.value }))}
+                  placeholder="昵称"
+                />
+              </label>
+              <label className="settings-field stack">
+                <span>头像 URL</span>
+                <input
+                  value={profileDraft.avatarUrl}
+                  onChange={(event) => setProfileDraft((draft) => ({ ...draft, avatarUrl: event.target.value }))}
+                  placeholder="/uploads/... 或 https://..."
+                />
+              </label>
+              <input
+                ref={avatarInputRef}
+                className="hidden-file-input"
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                onChange={chooseAvatar}
+              />
+              <div className="settings-profile-actions">
+                <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={savingProfile}>
+                  <Image size={15} />
+                  <span>上传头像</span>
+                </button>
+                <button type="submit" disabled={savingProfile || !profileDraft.displayName.trim()}>
+                  <Check size={15} />
+                  <span>{savingProfile ? "保存中" : "保存资料"}</span>
+                </button>
+              </div>
+            </form>
           </section>
 
           <section className="settings-section">
@@ -1957,7 +2085,11 @@ function MemberSheet({
             {humans.length ? (
               humans.map((user) => (
                 <button className="member-pick" key={user.id} onClick={() => addAndKeepOpen("human", user.id)}>
-                  <Avatar name={user.display_name || user.name} hue={hueFor(user.display_name || user.name)} />
+                  <Avatar
+                    name={user.display_name || user.name}
+                    hue={hueFor(user.display_name || user.name)}
+                    src={user.avatar_url}
+                  />
                   <span>{user.display_name || user.name}</span>
                 </button>
               ))
@@ -2065,6 +2197,7 @@ function normalizeChannel(channel) {
     rawName: member.raw_name || member.rawName || member.name,
     role: member.role || member.model_role || (member.is_system ? "管家" : "伙伴"),
     avatarHue: member.avatarHue ?? hueFor(member.name || String(member.id)),
+    avatarUrl: member.avatar_url || member.avatarUrl || "",
     isAgent: member.isAgent ?? member.member_type !== "human",
     is_system: member.is_system,
     ownerUserId: member.owner_user_id ?? member.ownerUserId ?? null,
@@ -2079,6 +2212,7 @@ function normalizeChannel(channel) {
     createdByUserId: channel.created_by_user_id ?? channel.createdByUserId ?? null,
     aiEnabled: channel.ai_enabled ?? true,
     avatarHue: channel.avatarHue ?? (members[0]?.avatarHue || hueFor(title)),
+    avatarUrl: channel.avatar_url || channel.avatarUrl || members.find((member) => member.memberType === "human")?.avatarUrl || "",
     lastMessage: channel.lastMessage || null,
     unread: channel.unread || 0,
   };
@@ -2099,6 +2233,7 @@ function normalizeMessage(message) {
     senderId: message.senderId || message.persona_id || authorUserId || (fromSelf ? "self" : "agent"),
     senderName,
     avatarHue: message.avatarHue ?? hueFor(senderName),
+    avatarUrl: message.author_avatar_url || message.authorAvatarUrl || "",
     fromSelf,
     authorType,
     authorUserId,
