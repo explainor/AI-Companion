@@ -134,6 +134,7 @@ class TodoReorder(BaseModel):
 
 
 class UserCreate(BaseModel):
+    email: Optional[str] = None
     display_name: Optional[str] = None
     displayName: Optional[str] = None
     name: Optional[str] = None
@@ -143,6 +144,7 @@ class UserCreate(BaseModel):
 
 class UserRead(BaseModel):
     id: int
+    email: Optional[str] = None
     display_name: str
     avatar_url: Optional[str] = None
     created_at: str

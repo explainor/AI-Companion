@@ -94,6 +94,20 @@ def clean_avatar_url(value: str | None) -> str | None:
     raise HTTPException(status_code=400, detail="avatar_url must be an upload path, http(s) URL, or data image")
 
 
+def normalize_email(value: str | None) -> str | None:
+    email = (value or "").strip().lower()
+    if not email:
+        return None
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="email is invalid")
+    return email
+
+
+def default_display_name_for_email(email: str) -> str:
+    local = email.split("@", 1)[0].strip()
+    return local or "用户"
+
+
 def upload_suffix(filename: str, content_type: str) -> str:
     suffix = Path(filename).suffix.lower()
     if suffix:
@@ -482,11 +496,19 @@ async def create_user(request: Request) -> User:
         or request.query_params.get("name")
         or ""
     ).strip()
+    email = normalize_email(payload.get("email") or request.query_params.get("email"))
+    if not name and email:
+        name = default_display_name_for_email(email)
     if not name:
         raise HTTPException(status_code=400, detail="display_name is required")
     with Session(engine) as session:
-        existing = session.exec(select(User).where(User.display_name == name)).first()
-        if existing:
+        if email:
+            existing = session.exec(select(User).where(User.email == email)).first()
+            if existing:
+                ensure_user_steward(session, existing)
+                session.refresh(existing)
+                return existing
+        elif existing := session.exec(select(User).where(User.display_name == name)).first():
             ensure_user_steward(session, existing)
             session.refresh(existing)
             return existing
@@ -496,7 +518,7 @@ async def create_user(request: Request) -> User:
             or request.query_params.get("avatar_url")
             or request.query_params.get("avatarUrl")
         )
-        user = User(display_name=name, avatar_url=avatar_url)
+        user = User(email=email, display_name=name, avatar_url=avatar_url)
         session.add(user)
         session.commit()
         session.refresh(user)

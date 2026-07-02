@@ -56,6 +56,7 @@ class User(SQLModel, table=True):
     __tablename__ = "users"
 
     id: Optional[int] = Field(default=None, primary_key=True)
+    email: Optional[str] = Field(default=None, index=True)
     display_name: str = Field(index=True)
     avatar_url: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)

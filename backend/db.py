@@ -52,6 +52,7 @@ def migrate_sqlite() -> None:
             )
         table_migrations = {
             "users": [
+                ("email", "TEXT"),
                 ("avatar_url", "TEXT"),
             ],
             "channels": [
@@ -95,6 +96,7 @@ def migrate_sqlite() -> None:
             for name, definition in fields:
                 if name not in existing:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS ix_users_email ON users(email)")
         migrate_channel_members(conn)
         conn.execute("UPDATE messages SET status = 'delivered' WHERE status IS NULL")
         conn.execute("UPDATE messages SET author_type = 'ai' WHERE sender = 'persona'")

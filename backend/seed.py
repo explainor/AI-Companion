@@ -61,9 +61,16 @@ def seed_admin_settings(session: Session) -> None:
 def seed_data(session: Session) -> None:
     seed_settings(session)
     seed_admin_settings(session)
-    official = session.exec(select(User).where(User.display_name == "官方")).first()
+    official = session.exec(select(User).where(User.email == "official@local.test")).first()
     if not official:
-        official = User(display_name="官方")
+        official = session.exec(select(User).where(User.display_name == "官方")).first()
+    if not official:
+        official = User(email="official@local.test", display_name="官方")
+        session.add(official)
+        session.commit()
+        session.refresh(official)
+    elif not official.email:
+        official.email = "official@local.test"
         session.add(official)
         session.commit()
         session.refresh(official)

@@ -48,11 +48,12 @@ async function request(path, options = {}) {
 function App() {
   const [currentUser, setCurrentUser] = useState(() => {
     const id = sessionStorage.getItem("user_id");
+    const email = sessionStorage.getItem("email") || "";
     const displayName = sessionStorage.getItem("display_name");
     const avatarUrl = sessionStorage.getItem("avatar_url") || "";
-    return id && displayName ? { id: Number(id), display_name: displayName, avatar_url: avatarUrl } : null;
+    return id && displayName ? { id: Number(id), email, display_name: displayName, avatar_url: avatarUrl } : null;
   });
-  const [identityDraft, setIdentityDraft] = useState("");
+  const [identityDraft, setIdentityDraft] = useState({ email: "", displayName: "" });
   const [users, setUsers] = useState([]);
   const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "light");
   const [accent, setAccent] = useState(() => localStorage.getItem("accent") || "graphite");
@@ -242,26 +243,29 @@ function App() {
 
   async function chooseIdentity(event) {
     event.preventDefault();
-    const displayName = identityDraft.trim();
-    if (!displayName) return;
+    const email = identityDraft.email.trim().toLowerCase();
+    const displayName = identityDraft.displayName.trim();
+    if (!isValidEmail(email)) return;
     const user = await request("/users", {
       method: "POST",
-      body: JSON.stringify({ display_name: displayName }),
+      body: JSON.stringify({ email, display_name: displayName || undefined }),
       headers: {},
     });
     sessionStorage.setItem("user_id", String(user.id));
+    sessionStorage.setItem("email", user.email || email);
     sessionStorage.setItem("display_name", user.display_name);
     sessionStorage.setItem("avatar_url", user.avatar_url || "");
     setCurrentUser(user);
-    setIdentityDraft("");
+    setIdentityDraft({ email: "", displayName: "" });
   }
 
   function handleLogout() {
     sessionStorage.removeItem("user_id");
+    sessionStorage.removeItem("email");
     sessionStorage.removeItem("display_name");
     sessionStorage.removeItem("avatar_url");
     setCurrentUser(null);
-    setIdentityDraft("");
+    setIdentityDraft({ email: "", displayName: "" });
     setMessages([]);
     setStewardMessages([]);
     setMentionedMembers([]);
@@ -605,6 +609,7 @@ function App() {
 
   function rememberCurrentUser(user) {
     sessionStorage.setItem("user_id", String(user.id));
+    sessionStorage.setItem("email", user.email || "");
     sessionStorage.setItem("display_name", user.display_name);
     sessionStorage.setItem("avatar_url", user.avatar_url || "");
     setCurrentUser(user);
@@ -764,15 +769,21 @@ function App() {
       <main className="identity-root" data-theme={theme} data-accent={accent}>
         <form className="identity-card" onSubmit={chooseIdentity}>
           <div className="brand-mark">C</div>
-          <h1>选择你的名字</h1>
-          <p>本地薄身份，无密码。两个人用不同名字进入同一频道即可测试 v6。</p>
+          <h1>邮箱登录</h1>
+          <p>邮箱用于找回同一个本地用户；昵称和头像只负责展示，之后可以随时修改。</p>
           <input
-            value={identityDraft}
-            onChange={(event) => setIdentityDraft(event.target.value)}
-            placeholder="例如：小舒"
+            type="email"
+            value={identityDraft.email}
+            onChange={(event) => setIdentityDraft((draft) => ({ ...draft, email: event.target.value }))}
+            placeholder="you@example.com"
             autoFocus
           />
-          <button disabled={!identityDraft.trim()}>进入</button>
+          <input
+            value={identityDraft.displayName}
+            onChange={(event) => setIdentityDraft((draft) => ({ ...draft, displayName: event.target.value }))}
+            placeholder="昵称（首次创建可填）"
+          />
+          <button disabled={!isValidEmail(identityDraft.email)}>进入</button>
         </form>
       </main>
     );
@@ -1912,7 +1923,7 @@ function SettingsDialog({
               <Avatar name={currentUser?.display_name || "我"} hue={280} src={currentUser?.avatar_url} />
               <div>
                 <strong>{currentUser?.display_name || "未登录"}</strong>
-                <p>User #{currentUser?.id || "-"}</p>
+                <p>{currentUser?.email || "未绑定邮箱"} · User #{currentUser?.id || "-"}</p>
               </div>
             </div>
             <form className="settings-profile-form" onSubmit={submitProfile}>
@@ -2398,6 +2409,10 @@ function memberLabel(member) {
     return member.name.includes("的AI·") ? member.name : `${member.name}·私人AI`;
   }
   return `${member.name}·公共AI`;
+}
+
+function isValidEmail(value = "") {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value).trim());
 }
 
 function textMentionsMember(text, label) {

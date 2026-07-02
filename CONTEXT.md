@@ -112,7 +112,7 @@ frontend/src/
 
 | 表名 | 关键字段 | 用途 |
 |---|---|---|
-| `users` | `id`, `display_name`, `avatar_url`, `created_at` | 薄身份真人用户；稳定识别走 `id` / `X-User-Id`，昵称和头像可改。 |
+| `users` | `id`, `email`, `display_name`, `avatar_url`, `created_at` | 薄身份真人用户；登录找回走邮箱，稳定识别走 `id` / `X-User-Id`，昵称和头像可改。 |
 | `personas` | `id`, `name`, `system_prompt`, `model`, `is_steward`, `is_system`, `model_role`, `model_override`, `sim_config`, `kind`, `creator_user_id` | AI/系统角色基础信息、角色分类与创作者归属。 |
 | `persona_card` | `persona_id`, `owner_user_id`, `persona_core`, `self_identity`, `relationship_backstory`, `speaking_style`, `example_dialogues`, `world_info`, `voice`, `traits` | 结构化角色卡与私人 AI owner 信息。 |
 | `persona_state` | `persona_id`, `familiarity`, `last_tone`, `last_interaction`, `last_interaction_at`, `milestones` | 角色关系状态与里程碑。 |
@@ -189,7 +189,8 @@ PUT    /api/settings/{key}
 
 ### 功能完成状态
 
-- [x] 双真人薄身份：`users` 表、`X-User-Id`、消息 `author_user_id` 和频道成员 `member_id` 作为稳定身份。
+- [x] 双真人薄身份：邮箱用于登录/找回用户；`users.id`、`X-User-Id`、消息 `author_user_id` 和频道成员 `member_id` 作为稳定身份。
+- [x] `POST /api/users` 支持邮箱登录/自动注册：传 `email` 时按规范化邮箱查找，存在则返回同一用户 ID，不用昵称识别。
 - [x] 用户资料可修改：`PATCH /api/users/{user_id}` 支持昵称和头像 URL，且只能编辑当前 `X-User-Id` 对应用户。
 - [x] 用户头像可上传：`POST /api/users/{user_id}/avatar` 保存到 `/uploads/avatars/user_{id}/...`，只接受 png/jpeg/gif/webp。
 - [x] 频道成员、频道列表和历史消息读模型会返回真人 `avatar_url` / `author_avatar_url`，前端头像图片即时展示。
@@ -222,6 +223,7 @@ PUT    /api/settings/{key}
 # backend/api/routes.py
 def get_current_user(session: Session, x_user_id: str | None) -> User
 def clean_avatar_url(value: str | None) -> str | None
+def normalize_email(value: str | None) -> str | None
 def get_user(user_id: int) -> User
 def update_user(user_id: int, payload: UserUpdate, x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> User
 async def upload_user_avatar(user_id: int, file: UploadFile = File(...), x_user_id: str | None = Header(default=None, alias="X-User-Id")) -> User
@@ -232,7 +234,7 @@ def get_memory_records(include_superseded: bool = Query(default=False), x_user_i
 
 ```python
 # backend/schemas.py
-class UserRead(BaseModel): id: int; display_name: str; avatar_url: Optional[str]; created_at: str
+class UserRead(BaseModel): id: int; email: Optional[str]; display_name: str; avatar_url: Optional[str]; created_at: str
 class UserUpdate(BaseModel): display_name/displayName/name, avatar_url/avatarUrl
 class MessageRead(BaseModel): author_user_id, author_user_name, author_avatar_url, media fields
 ```
@@ -270,6 +272,6 @@ function MemberSheet({ open, onOpenChange, channel, personas, users, currentUser
 
 - 后端扫描：PowerShell `Get-ChildItem -Path backend -Recurse -File -Filter *.py`，当前 40 个 `.py` 文件。
 - 前端扫描：`frontend/src/App.jsx`、`frontend/src/styles.css`。
-- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；本轮新增 `users.avatar_url` 可空列。
-- API 路由扫描：`rg -n "^@router\\.|^def |^async def |class .*\\(.*BaseModel|class .*\\(SQLModel" backend/...`；本轮新增 `PATCH /api/users/{user_id}` 和 `POST /api/users/{user_id}/avatar`。
-- 本轮验证：`python -m compileall backend scripts` 通过；`python scripts/smoke_two_users.py` 通过；`npm.cmd run build` 通过；额外 TestClient 验证按 ID 修改昵称/头像 URL 后用户 ID 保持不变，非本人编辑被拒绝。
+- 数据库 schema：`sqlite3 app.db ".schema"` 执行成功；用户表当前包含 `email`、`avatar_url`，并有 `ix_users_email` 唯一索引。
+- API 路由扫描：`rg -n "^@router\\.|^def |^async def |class .*\\(.*BaseModel|class .*\\(SQLModel" backend/...`；用户资料路由包括 `POST /api/users`、`PATCH /api/users/{user_id}`、`POST /api/users/{user_id}/avatar`。
+- 本轮验证：迁移前已备份 `app.db.backup_20260702_104501`，并在副本验证加列/唯一索引不改变用户行数；`python -m compileall backend scripts` 通过；`python scripts/smoke_two_users.py` 通过；`npm.cmd run build` 通过；额外 TestClient 验证同一邮箱返回稳定用户 ID，昵称修改不改变 ID/email。
